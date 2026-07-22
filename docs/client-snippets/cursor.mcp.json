@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "hai": {
+      "command": "uv",
+      "args": [
+        "run",
+        "--directory",
+        "/home/smlflg/Projekte/MBP_Mirgraatin/HAI-MCP",
+        "hai-mcp"
+      ],
+      "env": {
+        "HAI_HOME": "/tmp/hai-mcp-cursor-isolated"
+      }
+    }
+  }
+}

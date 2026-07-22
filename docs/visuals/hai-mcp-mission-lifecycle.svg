@@ -1,0 +1,264 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080" viewBox="0 0 1920 1080" role="img" aria-labelledby="title desc">
+  <title id="title">HAI-MCP Missionslebenszyklus</title>
+  <desc id="desc">Infografik der vierzehn HAI-MCP-Funktionen von Intake ueber Missionsvertrag und Session-Lease bis Proof und Tagesabschluss.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#07111f"/>
+      <stop offset="0.55" stop-color="#10152a"/>
+      <stop offset="1" stop-color="#18132d"/>
+    </linearGradient>
+    <radialGradient id="glowA" cx="0.18" cy="0.2" r="0.58">
+      <stop offset="0" stop-color="#4fe3c1" stop-opacity="0.19"/>
+      <stop offset="1" stop-color="#4fe3c1" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glowB" cx="0.84" cy="0.78" r="0.62">
+      <stop offset="0" stop-color="#a98bff" stop-opacity="0.2"/>
+      <stop offset="1" stop-color="#a98bff" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="coreGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#173b47"/>
+      <stop offset="1" stop-color="#172a3e"/>
+    </linearGradient>
+    <linearGradient id="flowGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#302653"/>
+      <stop offset="1" stop-color="#222441"/>
+    </linearGradient>
+    <linearGradient id="gateGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#49351f"/>
+      <stop offset="1" stop-color="#302838"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="150%">
+      <feDropShadow dx="0" dy="14" stdDeviation="14" flood-color="#000000" flood-opacity="0.34"/>
+    </filter>
+    <filter id="softGlow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="10" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="9" refY="6" orient="auto" markerUnits="strokeWidth">
+      <path d="M1,1 L10,6 L1,11 z" fill="#8da0bd"/>
+    </marker>
+    <marker id="arrowTeal" markerWidth="12" markerHeight="12" refX="9" refY="6" orient="auto" markerUnits="strokeWidth">
+      <path d="M1,1 L10,6 L1,11 z" fill="#4fe3c1"/>
+    </marker>
+    <style>
+      .sans { font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+      .mono { font-family: "JetBrains Mono", "SFMono-Regular", Consolas, monospace; }
+      .title { font-size: 50px; font-weight: 760; letter-spacing: -1.5px; fill: #f6f8ff; }
+      .subtitle { font-size: 21px; font-weight: 450; fill: #aebbd0; }
+      .eyebrow { font-size: 14px; font-weight: 750; letter-spacing: 2.2px; fill: #4fe3c1; }
+      .step { font-size: 13px; font-weight: 800; letter-spacing: 1.6px; fill: #7f91ac; }
+      .cardTitle { font-size: 24px; font-weight: 740; fill: #f5f7ff; }
+      .body { font-size: 16px; font-weight: 450; fill: #aebbd0; }
+      .tool { font-size: 15px; font-weight: 650; fill: #eef3ff; }
+      .small { font-size: 14px; font-weight: 500; fill: #95a5bd; }
+      .chip { font-size: 13px; font-weight: 780; letter-spacing: .8px; }
+      .invTitle { font-size: 17px; font-weight: 720; fill: #f6f8ff; }
+      .invBody { font-size: 14px; font-weight: 480; fill: #aebbd0; }
+      .coreCard { fill: url(#coreGrad); stroke: #4fe3c1; stroke-width: 1.5; }
+      .flowCard { fill: url(#flowGrad); stroke: #a98bff; stroke-width: 1.5; }
+      .mixedCard { fill: #172337; stroke: #6ecfce; stroke-width: 1.5; }
+      .route { fill: none; stroke: #8da0bd; stroke-width: 3; marker-end: url(#arrow); }
+      .routeTeal { fill: none; stroke: #4fe3c1; stroke-width: 3; marker-end: url(#arrowTeal); }
+    </style>
+  </defs>
+
+  <rect width="1920" height="1080" fill="url(#bg)"/>
+  <rect width="1920" height="1080" fill="url(#glowA)"/>
+  <rect width="1920" height="1080" fill="url(#glowB)"/>
+  <g opacity="0.17">
+    <path d="M0 152H1920M0 928H1920" stroke="#72809a"/>
+    <path d="M77 0V1080M1843 0V1080" stroke="#72809a"/>
+  </g>
+
+  <g class="sans">
+    <text x="82" y="76" class="eyebrow">HUMAN–AGENT INTERFACE · CONTROL PLANE</text>
+    <text x="82" y="132" class="title">Vom Gedanken zur belegten Mission</text>
+    <text x="84" y="171" class="subtitle">14 Funktionen · ein kanonischer Vertrag · Cursor Composer 2.5 baut nur mit zeitlich begrenztem Arbeitsrecht</text>
+
+    <g transform="translate(1510 66)">
+      <rect width="326" height="92" rx="20" fill="#111b2e" stroke="#33445f"/>
+      <circle cx="34" cy="30" r="7" fill="#4fe3c1"/>
+      <text x="53" y="35" class="small" fill="#dfe8f7">CORE · Missionsrechte</text>
+      <circle cx="34" cy="62" r="7" fill="#a98bff"/>
+      <text x="53" y="67" class="small" fill="#dfe8f7">FLOW · menschlicher Loop</text>
+    </g>
+
+    <!-- Main path connectors -->
+    <path d="M338 337 H382" class="route"/>
+    <path d="M684 337 H728" class="route"/>
+    <path d="M1030 337 H1074" class="route"/>
+    <path d="M1376 337 H1420" class="route"/>
+
+    <!-- Step 1 -->
+    <g transform="translate(74 240)" filter="url(#shadow)">
+      <rect width="264" height="194" rx="25" class="flowCard"/>
+      <rect x="22" y="21" width="64" height="28" rx="14" fill="#a98bff" fill-opacity="0.17" stroke="#a98bff"/>
+      <text x="39" y="40" class="chip" fill="#d8ccff">FLOW</text>
+      <text x="22" y="79" class="step">01 · ERFASSEN</text>
+      <text x="22" y="111" class="cardTitle">Intake</text>
+      <text x="22" y="141" class="mono tool">hai_intake</text>
+      <text x="22" y="171" class="body">Rohgedanke rein.</text>
+      <text x="22" y="191" class="body">Nur eine ID zurück.</text>
+    </g>
+
+    <!-- Step 2 -->
+    <g transform="translate(382 240)" filter="url(#shadow)">
+      <rect width="302" height="194" rx="25" class="flowCard"/>
+      <rect x="22" y="21" width="64" height="28" rx="14" fill="#a98bff" fill-opacity="0.17" stroke="#a98bff"/>
+      <text x="39" y="40" class="chip" fill="#d8ccff">FLOW</text>
+      <text x="22" y="79" class="step">02 · REDUZIEREN</text>
+      <text x="22" y="111" class="cardTitle">Verdichten</text>
+      <text x="22" y="141" class="mono tool">hai_distill</text>
+      <text x="22" y="171" class="body">1 Entscheidung · 1 Schritt</text>
+      <text x="22" y="191" class="body">alles andere → Park</text>
+    </g>
+
+    <!-- Step 3 -->
+    <g transform="translate(728 220)" filter="url(#shadow)">
+      <rect width="302" height="234" rx="25" class="mixedCard"/>
+      <rect x="22" y="21" width="64" height="28" rx="14" fill="#4fe3c1" fill-opacity="0.14" stroke="#4fe3c1"/>
+      <text x="38" y="40" class="chip" fill="#aef4e4">CORE</text>
+      <rect x="94" y="21" width="64" height="28" rx="14" fill="#a98bff" fill-opacity="0.15" stroke="#a98bff"/>
+      <text x="111" y="40" class="chip" fill="#d8ccff">FLOW</text>
+      <text x="22" y="81" class="step">03 · VERSPRECHEN</text>
+      <text x="22" y="113" class="cardTitle">Mission öffnen</text>
+      <text x="22" y="146" class="mono tool">hai_open_mission</text>
+      <text x="22" y="172" class="mono tool">hai_mission_start</text>
+      <text x="22" y="205" class="body">Artefakt · Done-Kriterien</text>
+      <text x="22" y="225" class="body">Non-Goals · Owner · Version</text>
+    </g>
+
+    <!-- Step 4 -->
+    <g transform="translate(1074 220)" filter="url(#shadow)">
+      <rect width="302" height="234" rx="25" class="coreCard"/>
+      <rect x="22" y="21" width="64" height="28" rx="14" fill="#4fe3c1" fill-opacity="0.14" stroke="#4fe3c1"/>
+      <text x="38" y="40" class="chip" fill="#aef4e4">CORE</text>
+      <text x="22" y="81" class="step">04 · ARBEITSRECHT</text>
+      <text x="22" y="113" class="cardTitle">Session-Lease</text>
+      <text x="22" y="146" class="mono tool">hai_authorize_session</text>
+      <text x="22" y="172" class="mono tool">hai_get_contract</text>
+      <text x="22" y="205" class="body">Agent + Rolle + Beitrag</text>
+      <text x="22" y="225" class="body">an Version + Zeit gebunden</text>
+    </g>
+
+    <!-- Step 5 -->
+    <g transform="translate(1420 220)" filter="url(#shadow)">
+      <rect width="426" height="234" rx="25" class="mixedCard"/>
+      <rect x="22" y="21" width="64" height="28" rx="14" fill="#4fe3c1" fill-opacity="0.14" stroke="#4fe3c1"/>
+      <text x="38" y="40" class="chip" fill="#aef4e4">CORE</text>
+      <rect x="94" y="21" width="64" height="28" rx="14" fill="#a98bff" fill-opacity="0.15" stroke="#a98bff"/>
+      <text x="111" y="40" class="chip" fill="#d8ccff">FLOW</text>
+      <text x="22" y="81" class="step">05 · BEOBACHTEN</text>
+      <text x="22" y="113" class="cardTitle">Drift prüfen</text>
+      <text x="22" y="146" class="mono tool">hai_check_activity</text>
+      <text x="22" y="172" class="mono tool">hai_drift_check</text>
+      <text x="22" y="205" class="body">ordnet nur ein — erfindet nichts:</text>
+      <text x="22" y="226" class="body">Scope · Blocker · Park · Drift · Unklar</text>
+    </g>
+
+    <!-- Classification rail -->
+    <g transform="translate(1124 502)">
+      <rect width="722" height="78" rx="22" fill="#101a2c" stroke="#33445f"/>
+      <g transform="translate(18 18)">
+        <rect width="148" height="42" rx="21" fill="#153c35" stroke="#4fe3c1"/>
+        <circle cx="22" cy="21" r="5" fill="#4fe3c1"/>
+        <text x="38" y="27" class="small" fill="#c7fff2">in_scope</text>
+      </g>
+      <g transform="translate(180 18)">
+        <rect width="148" height="42" rx="21" fill="#45351e" stroke="#ffc76b"/>
+        <circle cx="22" cy="21" r="5" fill="#ffc76b"/>
+        <text x="38" y="27" class="small" fill="#ffe2ad">blocker</text>
+      </g>
+      <g transform="translate(342 18)">
+        <rect width="166" height="42" rx="21" fill="#342650" stroke="#a98bff"/>
+        <circle cx="22" cy="21" r="5" fill="#a98bff"/>
+        <text x="38" y="27" class="small" fill="#ddd3ff">park_candidate</text>
+      </g>
+      <g transform="translate(522 18)">
+        <rect width="182" height="42" rx="21" fill="#4a2433" stroke="#ff718b"/>
+        <circle cx="22" cy="21" r="5" fill="#ff718b"/>
+        <text x="38" y="27" class="small" fill="#ffc4ce">drift / unclear</text>
+      </g>
+    </g>
+    <path d="M1634 454 V494" class="route"/>
+
+    <!-- Side routes -->
+    <path d="M1478 580 C1478 648 1252 644 1252 696" class="route"/>
+    <path d="M1556 580 C1556 628 1644 628 1644 675" class="route"/>
+    <path d="M1306 580 C1306 624 884 608 884 676" class="route"/>
+    <path d="M1216 580 C1216 617 490 604 490 676" class="route"/>
+
+    <!-- Park -->
+    <g transform="translate(294 676)" filter="url(#shadow)">
+      <rect width="392" height="168" rx="25" class="mixedCard"/>
+      <text x="24" y="39" class="step">DRUCKVENTIL</text>
+      <text x="24" y="73" class="cardTitle">Idee parken</text>
+      <text x="24" y="107" class="mono tool">hai_park</text>
+      <text x="202" y="107" class="mono tool">hai_park_item</text>
+      <text x="24" y="139" class="body">verlustfrei, aber ohne Ausführungsrecht</text>
+    </g>
+
+    <!-- Recontract -->
+    <g transform="translate(728 676)" filter="url(#shadow)">
+      <rect width="312" height="168" rx="25" fill="url(#gateGrad)" stroke="#ffc76b" stroke-width="1.5"/>
+      <text x="24" y="39" class="step">OWNER GATE</text>
+      <text x="24" y="73" class="cardTitle">Neu kontrahieren</text>
+      <text x="24" y="107" class="mono tool">hai_recontract</text>
+      <text x="24" y="139" class="body">sichtbarer Diff · neue Version</text>
+      <text x="24" y="159" class="body">alle alten Leases ungültig</text>
+    </g>
+
+    <!-- Proof -->
+    <g transform="translate(1084 676)" filter="url(#shadow)">
+      <rect width="336" height="168" rx="25" class="mixedCard"/>
+      <text x="24" y="39" class="step">06 · BELEGEN</text>
+      <text x="24" y="73" class="cardTitle">Proof &amp; Close</text>
+      <text x="24" y="107" class="mono tool">hai_proof</text>
+      <text x="150" y="107" class="mono tool">hai_close_mission</text>
+      <text x="24" y="139" class="body">Beleg pro Done-Kriterium</text>
+      <text x="24" y="159" class="body">oder dokumentiert abbrechen</text>
+    </g>
+
+    <!-- Stop -->
+    <g transform="translate(1464 676)" filter="url(#shadow)">
+      <rect width="382" height="168" rx="25" class="flowCard"/>
+      <text x="24" y="39" class="step">07 · TERMINAL</text>
+      <text x="24" y="73" class="cardTitle">Tag stoppen</text>
+      <text x="24" y="107" class="mono tool">hai_stop</text>
+      <text x="24" y="139" class="body">Leases aus · Mission nur pausiert</text>
+      <text x="24" y="159" class="body">kein automatischer Plan für morgen</text>
+    </g>
+
+    <!-- Rejoin arrows -->
+    <path d="M884 676 V628 C884 604 938 604 938 580" class="route"/>
+    <path d="M1040 758 H1074" class="routeTeal"/>
+
+    <!-- Invariant bar -->
+    <g transform="translate(74 912)">
+      <rect width="1772" height="108" rx="26" fill="#0d1728" stroke="#2f405a"/>
+      <text x="28" y="34" class="eyebrow">NICHT VERHANDELBAR</text>
+      <g transform="translate(28 53)">
+        <circle cx="8" cy="8" r="7" fill="#4fe3c1"/>
+        <text x="25" y="14" class="invTitle">1 aktive Mission</text>
+      </g>
+      <g transform="translate(294 53)">
+        <circle cx="8" cy="8" r="7" fill="#68b9ff"/>
+        <text x="25" y="14" class="invTitle">Lease ↔ Vertragsversion</text>
+      </g>
+      <g transform="translate(650 53)">
+        <circle cx="8" cy="8" r="7" fill="#ffc76b"/>
+        <text x="25" y="14" class="invTitle">Owner-Gate bei Scopewechsel</text>
+      </g>
+      <g transform="translate(1062 53)">
+        <circle cx="8" cy="8" r="7" fill="#a98bff"/>
+        <text x="25" y="14" class="invTitle">Audit unveränderlich</text>
+      </g>
+      <g transform="translate(1360 53)">
+        <circle cx="8" cy="8" r="7" fill="#ff718b"/>
+        <text x="25" y="14" class="invTitle">„Done“ nur mit Evidenz</text>
+      </g>
+      <text x="28" y="92" class="invBody">HAI-MCP führt keine Modelle und keine Agenten aus. Es verwaltet ausschließlich Vertrag, Rechte, Zustand, Audit und Belege.</text>
+    </g>
+  </g>
+</svg>
