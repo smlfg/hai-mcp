@@ -37,6 +37,9 @@ EXPECTED_TOOLS = frozenset(
         "hai_recover",
         "hai_open_mission",
         "hai_authorize_session",
+        "hai_learning_start",
+        "hai_learning_complete",
+        "hai_learning_abandon",
         "hai_get_contract",
         "hai_check_activity",
         "hai_park_item",
@@ -56,6 +59,12 @@ async def _call(session: ClientSession, name: str, arguments: dict[str, Any]) ->
     result = await session.call_tool(name, arguments)
     text = result.content[0].text if result.content else "{}"
     return json.loads(text)
+
+
+def _same_resolved_path(left: str | Path | None, right: str | Path | None) -> bool:
+    if left is None or right is None:
+        return False
+    return Path(left).expanduser().resolve() == Path(right).expanduser().resolve()
 
 
 async def run_smoke(*, hai_home: Path, project: Path) -> dict[str, Any]:
@@ -96,7 +105,8 @@ async def run_smoke(*, hai_home: Path, project: Path) -> dict[str, Any]:
             steps.append(
                 {
                     "step": "hai_health",
-                    "ok": health.get("ok") is True and health.get("hai_home") == str(hai_home),
+                    "ok": health.get("ok") is True
+                    and _same_resolved_path(health.get("hai_home"), hai_home),
                     "response": health,
                 }
             )
@@ -155,6 +165,7 @@ async def run_smoke(*, hai_home: Path, project: Path) -> dict[str, Any]:
 
             auth: dict[str, Any] = {"ok": False}
             drift: dict[str, Any] = {"ok": False}
+            close: dict[str, Any] = {"ok": False}
             if mid and ver is not None:
                 auth = await _call(
                     session,
@@ -168,6 +179,7 @@ async def run_smoke(*, hai_home: Path, project: Path) -> dict[str, Any]:
                         "expected_result": "out.md",
                         "duration_minutes": 30,
                         "criterion_ids": ["c1"],
+                        "request_id": "stdio-smoke-writer-1",
                         "capabilities": ["read", "write"],
                     },
                 )
@@ -212,6 +224,39 @@ async def run_smoke(*, hai_home: Path, project: Path) -> dict[str, Any]:
                             },
                         }
                     )
+                    evidence = project / "out.md"
+                    evidence.write_text("stdio smoke evidence\n", encoding="utf-8")
+                    close = await _call(
+                        session,
+                        "hai_close_mission",
+                        {
+                            "mission_id": mid,
+                            "contract_version": ver,
+                            "closure": "completed",
+                            "outcome_summary": "stdio smoke completed with local evidence",
+                            "evidence": {"c1": {"path": str(evidence)}},
+                        },
+                    )
+                    steps.append(
+                        {
+                            "step": "hai_close_mission_completed",
+                            "ok": (
+                                close.get("ok") is True
+                                and close.get("status") == "completed"
+                                and "c1" in close.get("verified_criteria", {})
+                            ),
+                            "response": {
+                                k: close.get(k)
+                                for k in (
+                                    "ok",
+                                    "status",
+                                    "mission_id",
+                                    "verified_criteria",
+                                    "error",
+                                )
+                            },
+                        }
+                    )
 
     elapsed_ms = int((time.time() - started) * 1000)
     all_ok = all(s.get("ok") for s in steps)
@@ -230,11 +275,11 @@ async def run_smoke(*, hai_home: Path, project: Path) -> dict[str, Any]:
     }
 
 
-def write_artifact(payload: dict[str, Any]) -> Path:
-    ARTIFACT_DIR.mkdir(parents=True, exist_ok=True)
+def write_artifact(payload: dict[str, Any], *, artifact_dir: Path = ARTIFACT_DIR) -> Path:
+    artifact_dir.mkdir(parents=True, exist_ok=True)
     stamp = time.strftime("%Y%m%dT%H%M%S")
-    stamped = ARTIFACT_DIR / f"smoke-{stamp}.json"
-    latest = ARTIFACT_DIR / "latest.json"
+    stamped = artifact_dir / f"smoke-{stamp}.json"
+    latest = artifact_dir / "latest.json"
     text = json.dumps(payload, indent=2, ensure_ascii=False, sort_keys=True) + "\n"
     stamped.write_text(text, encoding="utf-8")
     latest.write_text(text, encoding="utf-8")
@@ -248,6 +293,12 @@ def main(argv: list[str] | None = None) -> int:
         type=Path,
         default=None,
         help="Isolated HAI_HOME (default: fresh /tmp dir)",
+    )
+    parser.add_argument(
+        "--artifact-dir",
+        type=Path,
+        default=ARTIFACT_DIR,
+        help="Directory for smoke results (default: project evals/stdio_smoke)",
     )
     args = parser.parse_args(argv)
 
@@ -268,7 +319,7 @@ def main(argv: list[str] | None = None) -> int:
             "steps": [],
         }
 
-    path = write_artifact(payload)
+    path = write_artifact(payload, artifact_dir=args.artifact_dir)
     print(json.dumps({"artifact": str(path), "ok": payload.get("ok"), "exit_code": payload.get("exit_code")}, indent=2))
     return int(payload.get("exit_code", 1))
 

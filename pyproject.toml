@@ -25,4 +25,6 @@ packages = ["src/hai_mcp"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["src"]
+# "." makes the repo root importable so tests can reach scripts/ (test_stdio_smoke
+# imports scripts.stdio_smoke); without it that import raises ModuleNotFoundError.
+pythonpath = ["src", "."]

@@ -71,6 +71,7 @@ async def _authorize(
             "expected_result": "green",
             "duration_minutes": duration_minutes,
             "criterion_ids": ["dc-1"],
+            "request_id": f"boundary-{contract_version!s}-{duration_minutes!s}",
         },
     )
 
@@ -354,4 +355,3 @@ def test_stdio_close_mission_owner_ack_integer_fails_closed(tmp_path: Path) -> N
                 assert denied["error"] == "owner_gate_required"
 
     asyncio.run(_run())
-
