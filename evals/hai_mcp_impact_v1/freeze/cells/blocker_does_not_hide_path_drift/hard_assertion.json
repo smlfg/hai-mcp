@@ -1,0 +1,13 @@
+{
+  "cell_id": "blocker_does_not_hide_path_drift",
+  "error": null,
+  "fail": false,
+  "hard_pass": true,
+  "invalid": false,
+  "observed": {
+    "classification": "drift",
+    "reason": "path /etc/passwd is outside allowed root /tmp/hai-impact-v1-e_aep6gl/blocker_does_not_hide_path_drift/project",
+    "required_action": "stop"
+  },
+  "status": "hard_pass"
+}

@@ -1,0 +1,112 @@
+{
+  "command": [
+    "uv",
+    "run",
+    "--directory",
+    "/workspace",
+    "hai-mcp"
+  ],
+  "elapsed_ms": 442,
+  "env_boundary": {
+    "HAI_HOME": "/tmp/pytest-of-ubuntu/pytest-2/test_stdio_smoke_script_writes0/hai-home",
+    "cwd": "/workspace",
+    "project_path": "/tmp/pytest-of-ubuntu/pytest-2/test_stdio_smoke_script_writes0/hai-home/project",
+    "touches_live_dot_hai": false
+  },
+  "exit_code": 0,
+  "ok": true,
+  "steps": [
+    {
+      "ok": true,
+      "server": "hai-mcp",
+      "step": "initialize"
+    },
+    {
+      "extra": [],
+      "missing": [],
+      "ok": true,
+      "step": "list_tools",
+      "tool_count": 23,
+      "tools": [
+        "hai_accept_next_step",
+        "hai_authorize_session",
+        "hai_check_activity",
+        "hai_checkpoint",
+        "hai_close_mission",
+        "hai_distill",
+        "hai_drift_check",
+        "hai_get_contract",
+        "hai_get_next_step",
+        "hai_health",
+        "hai_intake",
+        "hai_mission_start",
+        "hai_open_mission",
+        "hai_park",
+        "hai_park_item",
+        "hai_proof",
+        "hai_propose_next_step",
+        "hai_read_artifacts",
+        "hai_recontract",
+        "hai_recover",
+        "hai_set_focus",
+        "hai_status",
+        "hai_stop"
+      ]
+    },
+    {
+      "ok": true,
+      "response": {
+        "hai_home": "/tmp/pytest-of-ubuntu/pytest-2/test_stdio_smoke_script_writes0/hai-home",
+        "hai_home_writable": true,
+        "max_active_lanes": 2,
+        "model_calls": false,
+        "ok": true,
+        "server": "hai-mcp",
+        "version": "0.1.0"
+      },
+      "step": "hai_health"
+    },
+    {
+      "ok": true,
+      "response": {
+        "error": "owner_gate_required",
+        "message": "hai_accept_next_step requires owner_ack=true (literal boolean) and a reason",
+        "ok": false
+      },
+      "step": "hai_accept_next_step_owner_ack_int"
+    },
+    {
+      "ok": true,
+      "response": {
+        "contract_version": 1,
+        "error": null,
+        "issues": null,
+        "mission_id": "M-20260826T215254-2f3b2fb5",
+        "ok": true,
+        "status": "active"
+      },
+      "step": "hai_mission_start"
+    },
+    {
+      "ok": true,
+      "response": {
+        "error": null,
+        "message": null,
+        "ok": true,
+        "session_id": "S-20260826T215254-19a20f4a"
+      },
+      "step": "hai_authorize_session"
+    },
+    {
+      "ok": true,
+      "response": {
+        "classification": "drift",
+        "error": null,
+        "ok": true,
+        "reason": "path /etc/passwd is outside allowed root /tmp/pytest-of-ubuntu/pytest-2/test_stdio_smoke_script_writes0/hai-home/project",
+        "required_action": "stop"
+      },
+      "step": "hai_drift_check_outside_path"
+    }
+  ]
+}

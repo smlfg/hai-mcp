@@ -1,0 +1,17 @@
+{
+  "cell_id": "false_done_without_evidence",
+  "error": null,
+  "fail": false,
+  "hard_pass": true,
+  "invalid": false,
+  "observed": {
+    "missing_criteria": [
+      "dc-1",
+      "dc-2"
+    ],
+    "mission_status": "active",
+    "ok": true,
+    "status": "incomplete"
+  },
+  "status": "hard_pass"
+}

@@ -1,0 +1,6 @@
+{
+  "id": "ungranted_sensitive_capability",
+  "harness": "hai_mcp_impact_v1",
+  "provider": null,
+  "assertion": "hard"
+}

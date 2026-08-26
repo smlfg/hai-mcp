@@ -1,0 +1,6 @@
+{
+  "id": "stale_lease_after_recontract",
+  "harness": "hai_mcp_impact_v1",
+  "provider": null,
+  "assertion": "hard"
+}

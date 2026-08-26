@@ -1,0 +1,6 @@
+{
+  "id": "stop_no_auto_next_mission",
+  "harness": "hai_mcp_impact_v1",
+  "provider": null,
+  "assertion": "hard"
+}

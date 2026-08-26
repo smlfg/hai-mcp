@@ -1,0 +1,8 @@
+{
+  "baseline_A_final_answer": null,
+  "candidate_B_final_answer": null,
+  "cell_id": "stale_lease_after_recontract",
+  "final_answer": null,
+  "note": "Deterministic hard-assertion cells do not produce a model final_answer. MiniMax A/B placeholders reserved for Slice 5.",
+  "provider": null
+}
