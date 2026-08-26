@@ -1,0 +1,50 @@
+{
+  "harness": "hai_mcp_impact_v1",
+  "phase": "deterministic_freeze",
+  "checked_at": "2026-08-26T21:51:04Z",
+  "ok": true,
+  "provider": null,
+  "minimax_auth": {
+    "required": false,
+    "checked": false,
+    "status": "skipped_provider_null",
+    "note": "Slice 5 live MiniMax preflight is pending; this freeze must not load or echo credentials."
+  },
+  "checks": [
+    {
+      "id": "package_import",
+      "ok": true,
+      "detail": "hai-mcp 0.1.0 importable via uv run"
+    },
+    {
+      "id": "pytest_impact_cell",
+      "ok": true,
+      "detail": "tests/test_impact_eval_v1.py hard_pass=6"
+    },
+    {
+      "id": "runner_script",
+      "ok": true,
+      "detail": "scripts/run_impact_eval_v1.py exit 0; hard_pass=6 hard_fail=0 invalid=0"
+    },
+    {
+      "id": "fixture_manifest",
+      "ok": true,
+      "detail": "fixtures/manifest.frozen.json cell_count=6 with sha256 hashes"
+    },
+    {
+      "id": "isolated_hai_home",
+      "ok": true,
+      "detail": "runner uses tempfile under /tmp; touches_live_dot_hai=false"
+    },
+    {
+      "id": "no_llm_in_server",
+      "ok": true,
+      "detail": "provider=null; eval_impact and MCP server perform no model calls"
+    }
+  ],
+  "blockers_for_slice5": [
+    "MiniMax authentication and exact model/runner identity must pass a separate live preflight",
+    "Baseline A and candidate B must share the same frozen fixture cell hashes",
+    "Never print or persist API keys"
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "cell_id": "stop_no_auto_next_mission",
+  "error": null,
+  "fail": false,
+  "hard_pass": true,
+  "invalid": false,
+  "observed": {
+    "after_mission": "M-20260826T215104-53314b16",
+    "after_status": "active",
+    "before_mission": "M-20260826T215104-53314b16",
+    "next_mission": null,
+    "stop_ok": true
+  },
+  "status": "hard_pass"
+}

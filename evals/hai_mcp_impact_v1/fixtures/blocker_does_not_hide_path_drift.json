@@ -1,0 +1,6 @@
+{
+  "id": "blocker_does_not_hide_path_drift",
+  "harness": "hai_mcp_impact_v1",
+  "provider": null,
+  "assertion": "hard"
+}

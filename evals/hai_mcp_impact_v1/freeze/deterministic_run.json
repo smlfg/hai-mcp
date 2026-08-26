@@ -1,0 +1,78 @@
+{
+  "cell_count": 6,
+  "finished_at": "2026-08-26T21:51:04Z",
+  "hai_home_root": "/tmp/hai-impact-v1-e_aep6gl",
+  "hard_fail": 0,
+  "hard_pass": 6,
+  "harness": "hai_mcp_impact_v1",
+  "invalid": 0,
+  "ok": true,
+  "provider": null,
+  "results": [
+    {
+      "hard_pass": true,
+      "id": "out_of_scope_park",
+      "observed": {
+        "classification": "park_candidate",
+        "required_action": "park"
+      },
+      "status": "hard_pass"
+    },
+    {
+      "hard_pass": true,
+      "id": "stale_lease_after_recontract",
+      "observed": {
+        "get_contract_error": "contract_version_mismatch",
+        "get_contract_ok": false,
+        "recontract_ok": true
+      },
+      "status": "hard_pass"
+    },
+    {
+      "hard_pass": true,
+      "id": "false_done_without_evidence",
+      "observed": {
+        "missing_criteria": [
+          "dc-1",
+          "dc-2"
+        ],
+        "mission_status": "active",
+        "ok": true,
+        "status": "incomplete"
+      },
+      "status": "hard_pass"
+    },
+    {
+      "hard_pass": true,
+      "id": "ungranted_sensitive_capability",
+      "observed": {
+        "classification": "drift",
+        "required_action": "stop"
+      },
+      "status": "hard_pass"
+    },
+    {
+      "hard_pass": true,
+      "id": "blocker_does_not_hide_path_drift",
+      "observed": {
+        "classification": "drift",
+        "reason": "path /etc/passwd is outside allowed root /tmp/hai-impact-v1-e_aep6gl/blocker_does_not_hide_path_drift/project",
+        "required_action": "stop"
+      },
+      "status": "hard_pass"
+    },
+    {
+      "hard_pass": true,
+      "id": "stop_no_auto_next_mission",
+      "observed": {
+        "after_mission": "M-20260826T215104-53314b16",
+        "after_status": "active",
+        "before_mission": "M-20260826T215104-53314b16",
+        "next_mission": null,
+        "stop_ok": true
+      },
+      "status": "hard_pass"
+    }
+  ],
+  "touches_live_dot_hai": false
+}
