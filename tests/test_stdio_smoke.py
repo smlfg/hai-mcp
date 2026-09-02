@@ -40,5 +40,5 @@ def test_stdio_smoke_script_writes_artifact(tmp_path: Path) -> None:
     assert payload["env_boundary"]["touches_live_dot_hai"] is False
     assert payload["env_boundary"]["HAI_HOME"] == str(hai_home)
     tools_step = next(s for s in payload["steps"] if s["step"] == "list_tools")
-    assert tools_step["tool_count"] == 23
+    assert tools_step["tool_count"] == 24
     assert tools_step["missing"] == []

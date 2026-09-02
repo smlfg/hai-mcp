@@ -22,6 +22,7 @@
 | `hai_checkpoint` | history/checkpoints | none |
 | `hai_recover` | no (read + advice) | none |
 | `hai_open_mission` | mission + contract v1 | valid finite contract; no second active mission |
+| `hai_bind_project` | mount table | **owner_ack=true + reason** |
 | `hai_authorize_session` | session lease | active mission; current contract version; capacity |
 | `hai_get_contract` | no | valid non-expired session lease |
 | `hai_check_activity` | audit only | valid session lease |
@@ -32,7 +33,8 @@
 ## Paths
 
 - `HAI_HOME` (env, default `~/.hai`)
-- Project artifacts: `<project_path>/Projek-Managment/`
+- Logical projects: `HAI_HOME/core/projects.json` (`project_id` + per-device `mounts`)
+- Project artifacts: `<project_path>/Projek-Managment/` (legacy) or device mount + relative prefixes when `project_id` is set
 - All writes resolved and confined
 
 ## Artifact names (Run Contract)
@@ -62,3 +64,13 @@ Structured JSON in tool result with `ok: false` and `error` code:
 - `lease_revoked`
 - `review_required`
 - `parallel_session_denied`
+- `device_mount_required`
+
+## Transport note
+
+Optional `streamable-http` transport is trusted-localhost or bearer-token gated (`HAI_HTTP_TOKEN`); it is not adversarial owner authentication.
+
+## Session / close device fields
+
+- `hai_authorize_session`: optional `device_id`, `harness_id` (required `device_id` when contract has `project_id`)
+- `hai_close_mission` / `hai_proof`: optional `device_id` (required when contract has `project_id`)

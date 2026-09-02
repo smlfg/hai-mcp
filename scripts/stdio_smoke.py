@@ -36,6 +36,7 @@ EXPECTED_TOOLS = frozenset(
         "hai_checkpoint",
         "hai_recover",
         "hai_open_mission",
+        "hai_bind_project",
         "hai_authorize_session",
         "hai_get_contract",
         "hai_check_activity",

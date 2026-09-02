@@ -12,6 +12,7 @@ from hai_mcp.config import Config, ensure_hai_home
 from hai_mcp.ids import validate_intake_id
 from hai_mcp.locking import mission_state_lock
 from hai_mcp.mission import MissionEngine, _new_id, _utc_now
+from hai_mcp.projects import ProjectStore
 from hai_mcp.paths import (
     PathError,
     assert_under,
@@ -90,6 +91,10 @@ class ControlPlane:
             "hai_home_writable": os.access(home, os.W_OK),
             "model_calls": False,
             "max_active_lanes": self.cfg.max_active_lanes,
+            "kernel": "contract_kernel",
+            "authenticated_owner": False,
+            "semantic_verification": False,
+            "projects": ProjectStore(home).list_projects(),
         }
         if project_path:
             try:
@@ -440,6 +445,8 @@ class ControlPlane:
         duration_minutes: Any,
         capabilities: list[str] | None = None,
         criterion_ids: list[str] | None = None,
+        device_id: str | None = None,
+        harness_id: str | None = None,
     ) -> dict[str, Any]:
         return self.mission.authorize_session(
             mission_id=mission_id,
@@ -451,6 +458,24 @@ class ControlPlane:
             duration_minutes=duration_minutes,
             capabilities=capabilities,
             criterion_ids=criterion_ids,
+            device_id=device_id,
+            harness_id=harness_id,
+        )
+
+    def bind_project(
+        self,
+        project_id: str,
+        device_id: str,
+        local_path: str,
+        owner_ack: Any = False,
+        reason: str = "",
+    ) -> dict[str, Any]:
+        return self.mission.bind_project(
+            project_id=project_id,
+            device_id=device_id,
+            local_path=local_path,
+            owner_ack=owner_ack,
+            reason=reason,
         )
 
     def get_contract(self, session_id: str) -> dict[str, Any]:
@@ -522,6 +547,7 @@ class ControlPlane:
         outcome_summary: str,
         closure: str,
         owner_ack: Any = False,
+        device_id: str | None = None,
     ) -> dict[str, Any]:
         return self.mission.close_mission(
             mission_id=mission_id,
@@ -530,6 +556,7 @@ class ControlPlane:
             outcome_summary=outcome_summary,
             closure=closure,
             owner_ack=owner_ack,
+            device_id=device_id,
         )
 
     # --- Additional daily-loop flow surface (thin, over the hardened engine) ---
