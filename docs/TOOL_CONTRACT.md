@@ -12,6 +12,7 @@
 | Tool | Mutates | Gate |
 |---|---|---|
 | `hai_health` | no | none |
+| `hai_register_mount` | projects.json | **owner_ack=true + reason** |
 | `hai_status` | no | none |
 | `hai_get_next_step` | no | none |
 | `hai_read_artifacts` | no | none |
@@ -28,6 +29,21 @@
 | `hai_park_item` | parking record | rationale required; no execution right |
 | `hai_recontract` | new contract version + lease revocation | **owner_ack=true + reason**; break_glass needs marker |
 | `hai_close_mission` | terminal mission state + lease revocation | completed: verified evidence per criterion; abandoned: **owner_ack=true + reason** |
+
+## Kernel boundary
+
+HAI-MCP is a **fail-closed contract kernel** for cooperative or instrumented agents.
+It is not an adversarial security boundary and does not perform semantic verification.
+`owner_ack=true` is a caller-supplied boolean, not authenticated human identity.
+Evidence checks confirm file existence under the project root and SHA-256 hash only.
+
+When a mission uses `constraints.project_id`, path and evidence resolution uses the
+session's `device_id` mount (registered via `hai_register_mount`). Legacy missions
+with `constraints.project_path` keep local absolute-path behavior.
+
+`hai_authorize_session` accepts optional `device_id` and `harness_id`; both are
+**required** when the contract has `project_id`. `hai_close_mission` / `hai_proof`
+accept optional `device_id`; it is **required** when `project_id` is set.
 
 ## Paths
 
@@ -62,3 +78,5 @@ Structured JSON in tool result with `ok: false` and `error` code:
 - `lease_revoked`
 - `review_required`
 - `parallel_session_denied`
+
+Unknown `project_id` or missing device mount → `invalid_args`.

@@ -8,6 +8,7 @@ from mcp.server.fastmcp import FastMCP
 from hai_mcp.boundary import strict_optional_time_limit_hours
 from hai_mcp.config import Config, SERVER_NAME
 from hai_mcp.state import ControlPlane
+from hai_mcp.transport import parse_runtime
 
 mcp = FastMCP(SERVER_NAME)
 
@@ -23,6 +24,26 @@ def get_control_plane() -> ControlPlane:
 
 def _json(result: dict[str, Any]) -> str:
     return json.dumps(result, indent=2, ensure_ascii=False, sort_keys=True)
+
+
+@mcp.tool()
+def hai_register_mount(
+    project_id: str,
+    device_id: str,
+    root_path: str,
+    owner_ack: Any,
+    reason: str,
+) -> str:
+    """Register or update a per-device project mount. Requires owner_ack=true + reason."""
+    return _json(
+        get_control_plane().register_mount(
+            project_id=project_id,
+            device_id=device_id,
+            root_path=root_path,
+            owner_ack=owner_ack,
+            reason=reason,
+        )
+    )
 
 
 @mcp.tool()
@@ -134,6 +155,8 @@ def hai_authorize_session(
     duration_minutes: Any,
     criterion_ids: list[str],
     capabilities: list[str] | None = None,
+    device_id: str | None = None,
+    harness_id: str | None = None,
 ) -> str:
     """Grant a time-bounded session lease tied to mission ID and exact contract version."""
     return _json(
@@ -147,6 +170,8 @@ def hai_authorize_session(
             duration_minutes=duration_minutes,
             capabilities=capabilities,
             criterion_ids=criterion_ids,
+            device_id=device_id,
+            harness_id=harness_id,
         )
     )
 
@@ -235,6 +260,7 @@ def hai_close_mission(
     outcome_summary: str,
     evidence: dict[str, Any] | None = None,
     owner_ack: Any = False,
+    device_id: str | None = None,
 ) -> str:
     """Complete with verified per-criterion evidence, or abandon with owner_ack and reason."""
     return _json(
@@ -245,6 +271,7 @@ def hai_close_mission(
             outcome_summary=outcome_summary,
             closure=closure,
             owner_ack=owner_ack,
+            device_id=device_id,
         )
     )
 
@@ -337,6 +364,7 @@ def hai_proof(
     contract_version: Any,
     evidence: dict[str, Any],
     outcome_summary: str,
+    device_id: str | None = None,
 ) -> str:
     """Close a mission only against verified per-criterion evidence. Thin wrapper over hai_close_mission (completed)."""
     return _json(
@@ -346,6 +374,7 @@ def hai_proof(
             evidence=evidence,
             outcome_summary=outcome_summary,
             closure="completed",
+            device_id=device_id,
         )
     )
 
@@ -369,8 +398,13 @@ def hai_stop(
 
 
 def main() -> None:
-    # stdio transport — model-agnostic MCP entrypoint
-    mcp.run(transport="stdio")
+    runtime = parse_runtime()
+    if runtime.transport == "stdio":
+        mcp.run(transport="stdio")
+    else:
+        mcp.settings.host = runtime.host
+        mcp.settings.port = runtime.port
+        mcp.run(transport="streamable-http")
 
 
 if __name__ == "__main__":

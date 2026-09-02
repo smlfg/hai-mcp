@@ -19,3 +19,17 @@ def mission_state_lock(home: Path):
             yield
         finally:
             fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+@contextlib.contextmanager
+def audit_log_lock(home: Path):
+    """Exclusive lock for append-only audit events.jsonl (no torn lines)."""
+    lock_path = home / ".audit.jsonl.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    assert_under(lock_path, home)
+    with open(lock_path, "a", encoding="utf-8") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)

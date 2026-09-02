@@ -4,6 +4,7 @@ import calendar
 import copy
 import hashlib
 import json
+import os
 import re
 import time
 import uuid
@@ -19,8 +20,9 @@ from hai_mcp.ids import (
     validate_mission_id,
     validate_session_id,
 )
-from hai_mcp.locking import mission_state_lock
+from hai_mcp.locking import audit_log_lock, mission_state_lock
 from hai_mcp.paths import PathError, assert_relative_allowed, assert_under, real_path, require_project_path
+from hai_mcp.projects import has_mounts, resolve_mount, validate_slug
 from hai_mcp.storage import read_json, write_json
 
 SENSITIVE_TRACE_ACTIONS = frozenset(
@@ -129,6 +131,14 @@ class MissionEngine:
         }
         path = self.audit_dir / f"{event_id}.json"
         write_json(path, entry)
+        jsonl_path = self.audit_dir / "events.jsonl"
+        line = _canonical_json(entry) + "\n"
+        with audit_log_lock(self.cfg.hai_home):
+            jsonl_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(jsonl_path, "a", encoding="utf-8") as handle:
+                handle.write(line)
+                handle.flush()
+                os.fsync(handle.fileno())
         return entry
 
     def load_active_pointer(self) -> dict[str, Any]:
@@ -251,6 +261,7 @@ class MissionEngine:
 
         non_goals_norm = [str(x).strip() for x in (non_goals or []) if str(x).strip()]
         constraints = dict(constraints or {})
+        project_id = constraints.get("project_id")
         project_path = constraints.get("project_path")
         allowed_paths = [str(p).strip() for p in constraints.get("allowed_paths", []) if str(p).strip()]
         for ap in allowed_paths:
@@ -267,7 +278,17 @@ class MissionEngine:
         if tl_err:
             issues.append(tl_err["message"])
 
-        if project_path:
+        project_id_norm: str | None = None
+        if project_id is not None and str(project_id).strip():
+            ok_slug, slug_msg = validate_slug(project_id, "project_id")
+            if not ok_slug:
+                issues.append(slug_msg)
+            else:
+                project_id_norm = str(project_id)
+                if not has_mounts(self.cfg, project_id_norm):
+                    issues.append(f"project_id {project_id_norm} has no registered device mounts")
+                project_path = None
+        elif project_path:
             try:
                 require_project_path(str(project_path))
             except PathError as exc:
@@ -280,6 +301,7 @@ class MissionEngine:
             "non_goals": non_goals_norm,
             "constraints": {
                 "owner": owner,
+                "project_id": project_id_norm,
                 "project_path": str(project_path) if project_path else None,
                 "allowed_paths": allowed_paths,
                 "capabilities": capabilities,
@@ -440,6 +462,8 @@ class MissionEngine:
         duration_minutes: Any,
         capabilities: list[str] | None,
         criterion_ids: list[str] | None,
+        device_id: str | None = None,
+        harness_id: str | None = None,
     ) -> dict[str, Any]:
         err = self._reject_mission_id(mission_id)
         if err:
@@ -538,6 +562,46 @@ class MissionEngine:
                     "clause": "constraints.capabilities",
                 }
 
+            contract_project_id = contract.get("constraints", {}).get("project_id")
+            lease_device_id: str | None = None
+            lease_harness_id: str | None = None
+            if contract_project_id:
+                if device_id is None or harness_id is None:
+                    return {
+                        "ok": False,
+                        "status": "denied",
+                        "error": "invalid_args",
+                        "message": "device_id and harness_id are required when contract has project_id",
+                    }
+                ok_d, msg_d = validate_slug(device_id, "device_id")
+                if not ok_d:
+                    return {"ok": False, "status": "denied", "error": "invalid_args", "message": msg_d}
+                ok_h, msg_h = validate_slug(harness_id, "harness_id")
+                if not ok_h:
+                    return {"ok": False, "status": "denied", "error": "invalid_args", "message": msg_h}
+                try:
+                    resolve_mount(self.cfg, contract_project_id, str(device_id))
+                except PathError as exc:
+                    return {
+                        "ok": False,
+                        "status": "denied",
+                        "error": exc.code,
+                        "message": exc.message,
+                    }
+                lease_device_id = str(device_id)
+                lease_harness_id = str(harness_id)
+            else:
+                if device_id is not None:
+                    ok_d, msg_d = validate_slug(device_id, "device_id")
+                    if not ok_d:
+                        return {"ok": False, "status": "denied", "error": "invalid_args", "message": msg_d}
+                    lease_device_id = str(device_id)
+                if harness_id is not None:
+                    ok_h, msg_h = validate_slug(harness_id, "harness_id")
+                    if not ok_h:
+                        return {"ok": False, "status": "denied", "error": "invalid_args", "message": msg_h}
+                    lease_harness_id = str(harness_id)
+
             session_id = _new_id("S")
             granted_at = _utc_now()
             expires_at = time.strftime(
@@ -555,6 +619,8 @@ class MissionEngine:
                 "expected_result": expected_result,
                 "criterion_ids": crit_ids,
                 "capabilities": granted_caps or sorted(allowed_caps),
+                "device_id": lease_device_id,
+                "harness_id": lease_harness_id,
                 "granted_at": granted_at,
                 "expires_at": expires_at,
                 "status": "active",
@@ -562,7 +628,13 @@ class MissionEngine:
             self.save_session(lease)
             audit = self.append_audit(
                 "session_authorized",
-                {"mission_id": mission_id, "session_id": session_id, "contract_version": version},
+                {
+                    "mission_id": mission_id,
+                    "session_id": session_id,
+                    "contract_version": version,
+                    "device_id": lease_device_id,
+                    "harness_id": lease_harness_id,
+                },
             )
             return {
                 "ok": True,
@@ -645,23 +717,47 @@ class MissionEngine:
                 return ng
         return None
 
-    def _path_allowed(self, contract: dict[str, Any], raw_path: str) -> tuple[bool, str | None]:
+    def _resolve_project_root(
+        self,
+        contract: dict[str, Any],
+        device_id: str | None,
+    ) -> tuple[Path | None, str | None]:
         constraints = contract.get("constraints", {})
+        project_id = constraints.get("project_id")
         project_path = constraints.get("project_path")
+        if project_id:
+            if not device_id:
+                return None, "device_id is required when contract has project_id"
+            try:
+                return resolve_mount(self.cfg, str(project_id), str(device_id)), None
+            except PathError as exc:
+                return None, exc.message
+        if project_path:
+            try:
+                return require_project_path(str(project_path)), None
+            except PathError as exc:
+                return None, exc.message
+        return None, "no project_path or project_id configured; path cannot be validated against a root"
+
+    def _path_allowed(
+        self,
+        contract: dict[str, Any],
+        raw_path: str,
+        device_id: str | None = None,
+    ) -> tuple[bool, str | None]:
+        constraints = contract.get("constraints", {})
         allowed_paths = constraints.get("allowed_paths", [])
         if not raw_path:
             return True, None
-        # Fail closed: a path was supplied but no project root exists to validate it against.
-        if not project_path:
-            return False, "no project_path configured; path cannot be validated against a root"
+        project, err_msg = self._resolve_project_root(contract, device_id)
+        if project is None:
+            return False, err_msg
         raw = str(raw_path)
         if "\x00" in raw:
             return False, "path contains a null byte"
         try:
-            project = require_project_path(str(project_path))
             path = Path(raw).expanduser()
             if not path.is_absolute():
-                # relative activity paths resolve under the project root, never the process CWD
                 path = project / path
             assert_relative_allowed(path, project, allowed_paths or [])
             return True, None
@@ -731,8 +827,9 @@ class MissionEngine:
         clause: str | None = None
 
         path_violation: tuple[str, str] | None = None
+        session_device_id = session.get("device_id")
         for raw in affected_paths or []:
-            allowed, err_msg = self._path_allowed(contract, raw)
+            allowed, err_msg = self._path_allowed(contract, raw, device_id=session_device_id)
             if not allowed:
                 path_violation = (err_msg or f"path outside allowed scope: {raw}", "constraints.allowed_paths")
                 break
@@ -926,8 +1023,18 @@ class MissionEngine:
                 candidate[key] = copy.deepcopy(changes[key])
 
         old_owner = old_contract.get("constraints", {}).get("owner")
+        old_project_id = old_contract.get("constraints", {}).get("project_id")
         candidate_constraints = dict(candidate.get("constraints") or {})
         candidate_constraints["owner"] = old_owner
+        if old_project_id is not None:
+            new_pid = candidate_constraints.get("project_id")
+            if new_pid is not None and new_pid != old_project_id:
+                return None, {
+                    "ok": False,
+                    "error": "invalid_args",
+                    "message": "project_id is immutable once set",
+                }
+            candidate_constraints["project_id"] = old_project_id
         candidate["constraints"] = candidate_constraints
 
         body, issues, validation = self._validate_open_payload(
@@ -1082,27 +1189,27 @@ class MissionEngine:
             "audit_classification": audit_payload.get("audit_classification"),
         }
 
-    def _verify_evidence_path(self, contract: dict[str, Any], raw_path: str) -> tuple[Path | None, str | None, dict[str, Any] | None]:
+    def _verify_evidence_path(
+        self,
+        contract: dict[str, Any],
+        raw_path: str,
+        device_id: str | None = None,
+    ) -> tuple[Path | None, str | None, dict[str, Any] | None]:
         if not raw_path or not str(raw_path).strip():
             return None, "evidence path is required", {"error": "invalid_args", "criterion_id": None}
         raw = str(raw_path)
         if "\x00" in raw:
             return None, "evidence path contains a null byte", {"error": "invalid_args", "path": raw}
-        constraints = contract.get("constraints", {})
-        project_path = constraints.get("project_path")
-        # Fail closed: without a configured project root, evidence cannot be confined or trusted.
-        if not project_path:
-            return None, "no project_path configured; evidence cannot be validated", {
+        project, root_err = self._resolve_project_root(contract, device_id)
+        if project is None:
+            return None, root_err or "evidence cannot be validated", {
                 "error": "invalid_args",
                 "path": raw,
             }
         try:
-            project = require_project_path(str(project_path))
             path = Path(raw).expanduser()
             if not path.is_absolute():
-                # relative evidence paths resolve under the project root, never the process CWD
                 path = project / path
-            # Confinement is checked BEFORE any existence/type/read probe.
             if path.is_symlink():
                 target = real_path(path)
                 try:
@@ -1145,6 +1252,7 @@ class MissionEngine:
         outcome_summary: str,
         closure: str,
         owner_ack: Any = False,
+        device_id: str | None = None,
     ) -> dict[str, Any]:
         err = self._reject_mission_id(mission_id)
         if err:
@@ -1211,6 +1319,24 @@ class MissionEngine:
         if not outcome_summary:
             return {"ok": False, "error": "invalid_args", "message": "outcome_summary is required for completion"}
 
+        contract_project_id = contract.get("constraints", {}).get("project_id")
+        close_device_id: str | None = None
+        if contract_project_id:
+            if device_id is None:
+                return {
+                    "ok": False,
+                    "error": "invalid_args",
+                    "message": "device_id is required when contract has project_id",
+                }
+            ok_d, msg_d = validate_slug(device_id, "device_id")
+            if not ok_d:
+                return {"ok": False, "error": "invalid_args", "message": msg_d}
+            try:
+                resolve_mount(self.cfg, str(contract_project_id), str(device_id))
+            except PathError as exc:
+                return {"ok": False, "error": exc.code, "message": exc.message}
+            close_device_id = str(device_id)
+
         if not isinstance(evidence, dict):
             return {"ok": False, "error": "invalid_args", "message": "evidence must be an object mapping criterion ids to records"}
 
@@ -1233,7 +1359,7 @@ class MissionEngine:
                     }
                 )
                 continue
-            _, err_msg, meta_ev = self._verify_evidence_path(contract, str(raw_path))
+            _, err_msg, meta_ev = self._verify_evidence_path(contract, str(raw_path), device_id=close_device_id)
             if err_msg:
                 item_out: dict[str, Any] = {"criterion_id": cid, "message": err_msg}
                 if meta_ev:

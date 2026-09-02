@@ -284,3 +284,4 @@ def test_additional_seven_tools_registered(tmp_path: Path) -> None:
     }
     assert additional_seven.issubset(registered)
     assert core_seven.issubset(registered)
+    assert "hai_register_mount" in registered

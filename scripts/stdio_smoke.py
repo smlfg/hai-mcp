@@ -26,6 +26,7 @@ ARTIFACT_DIR = REPO / "evals" / "stdio_smoke"
 EXPECTED_TOOLS = frozenset(
     {
         "hai_health",
+        "hai_register_mount",
         "hai_status",
         "hai_get_next_step",
         "hai_read_artifacts",
