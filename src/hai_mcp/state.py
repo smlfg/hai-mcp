@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import os
 import time
 import uuid
@@ -95,7 +96,10 @@ class ControlPlane:
             "authenticated_owner": False,
             "semantic_verification": False,
             "projects": ProjectStore(home).list_projects(),
+            "owner_gate": self.mission.owner_gate.describe(),
         }
+        if self.cfg.warnings:
+            result["config_warnings"] = list(self.cfg.warnings)
         if project_path:
             try:
                 project = require_project_path(project_path)
@@ -118,6 +122,8 @@ class ControlPlane:
             "max_active_lanes": self.cfg.max_active_lanes,
             "inbox_count": inbox_count,
             "hai_home": str(self.cfg.hai_home),
+            "owner_gate": self.cfg.owner_gate,
+            "pending_owner_challenges": self.mission.owner_gate.pending_count(),
         }
         if project_path:
             try:
@@ -294,28 +300,36 @@ class ControlPlane:
             "ok": True,
             "path": str(path),
             "canonical": False,
-            "message": "proposal written; call hai_accept_next_step with owner_ack=true to promote",
+            "message": "proposal written; promote via hai_accept_next_step (owner-gated)",
         }
 
     def accept_next_step(
         self,
         project_path: str,
-        owner_ack: Any,
-        reason: str,
+        owner_ack: Any = False,
+        reason: str | None = None,
         content: str | None = None,
+        owner_code: Any = None,
     ) -> dict[str, Any]:
-        if owner_ack is not True:
-            return {
-                "ok": False,
-                "error": "owner_gate_required",
-                "message": "hai_accept_next_step requires owner_ack=true (literal boolean) and a reason",
-            }
-        if not reason or not str(reason).strip():
-            return {
-                "ok": False,
-                "error": "owner_gate_required",
-                "message": "reason is required when accepting a next step",
-            }
+        reason_text = str(reason or "").strip()
+
+        # Legacy gate (HAI_OWNER_GATE=ack_legacy): the client asserts approval itself.
+        if self.cfg.owner_gate == "ack_legacy":
+            if owner_ack is not True:
+                return {
+                    "ok": False,
+                    "error": "owner_gate_required",
+                    "gate": "ack_legacy",
+                    "message": "hai_accept_next_step requires owner_ack=true (literal boolean) and a reason",
+                }
+            if not reason_text:
+                return {
+                    "ok": False,
+                    "error": "owner_gate_required",
+                    "gate": "ack_legacy",
+                    "message": "reason is required when accepting a next step",
+                }
+
         try:
             project = require_project_path(project_path)
             ad = ensure_artifact_dir(self.cfg, project)
@@ -339,6 +353,26 @@ class ControlPlane:
                 "error": "no_proposal",
                 "message": "no NEXT_STEP.proposed.md and no content provided",
             }
+
+        # Nonce gate (default): the code is bound to THIS body — swapping content after
+        # the owner saw it invalidates the challenge.
+        if self.cfg.owner_gate == "ack_legacy":
+            gate_info: dict[str, Any] = {"gate": "ack_legacy"}
+        else:
+            body_sha = hashlib.sha256(body.encode("utf-8")).hexdigest()
+            passed, gate_result = self.mission.owner_gate.require(
+                action="accept_next_step",
+                subject={"project_path": str(project), "body_sha256": body_sha},
+                summary=f"Accept NEXT_STEP for {project.name}",
+                preview={"project_path": str(project), "next_step": body.strip()[:600]},
+                owner_code=owner_code,
+            )
+            if not passed:
+                return gate_result
+            gate_info = gate_result
+            if not reason_text:
+                reason_text = f"owner code accepted ({gate_info['challenge_id']})"
+
         canonical = ad / "NEXT_STEP.md"
         history_dir = ad / "history"
         history_dir.mkdir(exist_ok=True)
@@ -352,7 +386,8 @@ class ControlPlane:
             f"\n\n---\n"
             f"_Accepted via hai-mcp_\n"
             f"- at: {time.strftime('%Y-%m-%dT%H:%M:%S%z')}\n"
-            f"- reason: {reason.strip()}\n"
+            f"- reason: {reason_text}\n"
+            f"- gate: {gate_info['gate']}\n"
         )
         # avoid duplicating meta if re-accepting same body
         final = body.rstrip() + meta
@@ -362,16 +397,18 @@ class ControlPlane:
         hist_note = {
             "event": "accept_next_step",
             "at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
-            "reason": reason.strip(),
+            "reason": reason_text,
             "project_path": str(project),
             "path": str(canonical),
+            "owner_gate": gate_info,
         }
         write_json(history_dir / f"accept_{stamp}.json", hist_note)
         return {
             "ok": True,
             "path": str(canonical),
             "canonical": True,
-            "reason": reason.strip(),
+            "reason": reason_text,
+            "owner_gate": gate_info,
         }
 
     def checkpoint(self, note: str | None = None, project_path: str | None = None) -> dict[str, Any]:
@@ -528,6 +565,7 @@ class ControlPlane:
         mode: str = "normal",
         owner_ack: Any = False,
         break_glass_marker: Any = False,
+        owner_code: Any = None,
     ) -> dict[str, Any]:
         return self.mission.recontract(
             mission_id=mission_id,
@@ -537,6 +575,7 @@ class ControlPlane:
             mode=mode,
             owner_ack=owner_ack,
             break_glass_marker=break_glass_marker,
+            owner_code=owner_code,
         )
 
     def close_mission(
@@ -548,6 +587,7 @@ class ControlPlane:
         closure: str,
         owner_ack: Any = False,
         device_id: str | None = None,
+        owner_code: Any = None,
     ) -> dict[str, Any]:
         return self.mission.close_mission(
             mission_id=mission_id,
@@ -557,6 +597,7 @@ class ControlPlane:
             closure=closure,
             owner_ack=owner_ack,
             device_id=device_id,
+            owner_code=owner_code,
         )
 
     # --- Additional daily-loop flow surface (thin, over the hardened engine) ---

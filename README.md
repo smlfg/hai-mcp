@@ -19,10 +19,22 @@ stdio MCP. Point your client at:
   "command": "uv",
   "args": ["run", "--directory", "/absolute/path/to/HAI-MCP", "hai-mcp"],
   "env": {
-    "HAI_HOME": "/home/you/.hai"
+    "HAI_HOME": "/home/you/.hai",
+    "HAI_OWNER_HOME": "/home/you/.hai-owner"
   }
 }
 ```
+
+## Owner gate
+
+The owner is a separate principal from the agent. Owner-gated actions
+(`hai_accept_next_step`, `hai_recontract`, abandoning a mission) are passed
+only with a one-time code the server delivers to the **owner**, never to the
+client: into `HAI_OWNER_HOME` (`file`, default) or to your phone via ntfy
+(`HAI_OWNER_CHANNEL=ntfy` + `HAI_OWNER_NTFY_TOPIC`). The code is bound to the
+exact change, single-use, expires, and only its hash is stored in `HAI_HOME`.
+`HAI_OWNER_GATE=ack_legacy` restores the old self-asserted `owner_ack` (an
+honor system — `hai_health` says so). Details: `docs/OWNER_GATE.md`.
 
 ## Tools (v0.1 — 23 tools, one state engine)
 
@@ -46,6 +58,7 @@ Mission lifecycle (canonical engine):
 | Tool | Role |
 | --- | --- |
 | `hai_open_mission` | Open a bounded mission with a versioned contract |
+| `hai_bind_project` | Bind a logical project id to a device mount (**owner_ack + reason**) |
 | `hai_authorize_session` | Time-bounded session lease on an exact contract version |
 | `hai_get_contract` | Exact contract for a valid lease |
 | `hai_check_activity` | Deterministic drift classification |

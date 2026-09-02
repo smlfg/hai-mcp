@@ -29,7 +29,7 @@ def test_stdio_owner_ack_integer_fails_closed(tmp_path: Path) -> None:
         params = StdioServerParameters(
             command="uv",
             args=["run", "--directory", str(REPO), "hai-mcp"],
-            env={**os.environ},
+            env={**os.environ, "HAI_OWNER_GATE": "ack_legacy"},  # legacy gate under test; nonce has its own stdio test
         )
         async with stdio_client(params) as (read, write):
             async with ClientSession(read, write) as session:
