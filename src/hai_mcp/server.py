@@ -408,14 +408,20 @@ def hai_stop(
     loop_closed: bool,
     clearer: str,
     agency_gained: str,
+    manual_practice: list[str] | None = None,
 ) -> str:
-    """Hard day terminal: record the three answers, invalidate active leases; no next-day plan. Missions are not closed."""
+    """Hard day terminal: record the three answers, invalidate active leases; no next-day plan. Missions are not closed.
+
+    manual_practice: what the owner did BY HAND today (e.g. "read the auth diff",
+    "ran pytest", "wrote the date regex") — the currency logbook for verification skills.
+    """
     return _json(
         get_control_plane().stop_day(
             day=day,
             loop_closed=loop_closed,
             clearer=clearer,
             agency_gained=agency_gained,
+            manual_practice=manual_practice,
         )
     )
 

@@ -699,15 +699,23 @@ class ControlPlane:
         loop_closed: bool,
         clearer: str,
         agency_gained: str,
+        manual_practice: list[str] | None = None,
     ) -> dict[str, Any]:
         """Hard terminal for the workday: record the three answers, invalidate active leases.
 
-        Does NOT complete or abandon a mission (that needs proof/owner_ack); the mission is
+        Does NOT complete or abandon a mission (that needs proof/owner gate); the mission is
         left paused (leases revoked) and there is deliberately no next-day plan.
+
+        ``manual_practice`` is the currency logbook: what the human did by hand today
+        (read a diff, ran the tests, wrote a regex). Like a pilot's manual-flying log —
+        the skills needed to verify the agent stay current only if they are exercised.
         """
         day = str(day or "").strip()
         if not day:
             return {"ok": False, "error": "invalid_args", "message": "day is required"}
+        if manual_practice is not None and not isinstance(manual_practice, list):
+            return {"ok": False, "error": "invalid_args", "message": "manual_practice must be a list of strings"}
+        practice = [str(x).strip() for x in (manual_practice or []) if str(x).strip()]
 
         paused_mission = None
         revoked: list[str] = []
@@ -731,6 +739,7 @@ class ControlPlane:
             "loop_closed": bool(loop_closed),
             "clearer": str(clearer or "").strip(),
             "agency_gained": str(agency_gained or "").strip(),
+            "manual_practice": practice,
             "paused_mission": paused_mission,
             "revoked_sessions": revoked,
             "next_mission": None,
@@ -741,6 +750,9 @@ class ControlPlane:
             "ok": True,
             "status": "day_stopped",
             "day": day,
+            "stop_id": stop_id,
+            "path": str(path),
+            "manual_practice": practice,
             "paused_mission": paused_mission,
             "revoked_sessions": revoked,
             "next_mission": None,
