@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import argparse
 import json
+import os
 from typing import Any
 
+import anyio
 from mcp.server.fastmcp import FastMCP
 
 from hai_mcp.boundary import strict_optional_time_limit_hours
 from hai_mcp.config import Config, SERVER_NAME
+from hai_mcp.http_transport import http_bind_allowed, http_token_from_env, wrap_with_bearer_token
 from hai_mcp.state import ControlPlane
 
 mcp = FastMCP(SERVER_NAME)
@@ -134,6 +138,8 @@ def hai_authorize_session(
     duration_minutes: Any,
     criterion_ids: list[str],
     capabilities: list[str] | None = None,
+    device_id: str | None = None,
+    harness_id: str | None = None,
 ) -> str:
     """Grant a time-bounded session lease tied to mission ID and exact contract version."""
     return _json(
@@ -147,6 +153,28 @@ def hai_authorize_session(
             duration_minutes=duration_minutes,
             capabilities=capabilities,
             criterion_ids=criterion_ids,
+            device_id=device_id,
+            harness_id=harness_id,
+        )
+    )
+
+
+@mcp.tool()
+def hai_bind_project(
+    project_id: str,
+    device_id: str,
+    local_path: str,
+    owner_ack: Any,
+    reason: str,
+) -> str:
+    """Bind a device-local directory to a logical project_id mount table entry. Requires owner_ack=true + reason."""
+    return _json(
+        get_control_plane().bind_project(
+            project_id=project_id,
+            device_id=device_id,
+            local_path=local_path,
+            owner_ack=owner_ack,
+            reason=reason,
         )
     )
 
@@ -235,6 +263,7 @@ def hai_close_mission(
     outcome_summary: str,
     evidence: dict[str, Any] | None = None,
     owner_ack: Any = False,
+    device_id: str | None = None,
 ) -> str:
     """Complete with verified per-criterion evidence, or abandon with owner_ack and reason."""
     return _json(
@@ -245,6 +274,7 @@ def hai_close_mission(
             outcome_summary=outcome_summary,
             closure=closure,
             owner_ack=owner_ack,
+            device_id=device_id,
         )
     )
 
@@ -337,6 +367,7 @@ def hai_proof(
     contract_version: Any,
     evidence: dict[str, Any],
     outcome_summary: str,
+    device_id: str | None = None,
 ) -> str:
     """Close a mission only against verified per-criterion evidence. Thin wrapper over hai_close_mission (completed)."""
     return _json(
@@ -346,6 +377,7 @@ def hai_proof(
             evidence=evidence,
             outcome_summary=outcome_summary,
             closure="completed",
+            device_id=device_id,
         )
     )
 
@@ -368,8 +400,54 @@ def hai_stop(
     )
 
 
-def main() -> None:
-    # stdio transport — model-agnostic MCP entrypoint
+def main(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(description="HAI-MCP control-plane server")
+    parser.add_argument(
+        "--transport",
+        choices=["stdio", "streamable-http"],
+        default=os.environ.get("HAI_TRANSPORT", "stdio"),
+        help="MCP transport (default: stdio; env HAI_TRANSPORT)",
+    )
+    parser.add_argument(
+        "--host",
+        default=os.environ.get("HAI_HTTP_HOST", "127.0.0.1"),
+        help="HTTP bind host for streamable-http (env HAI_HTTP_HOST)",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=int(os.environ.get("HAI_HTTP_PORT", "8765")),
+        help="HTTP bind port for streamable-http (env HAI_HTTP_PORT)",
+    )
+    args = parser.parse_args(argv)
+
+    if args.transport == "streamable-http":
+        token = http_token_from_env()
+        allowed, msg = http_bind_allowed(args.host, token)
+        if not allowed:
+            raise SystemExit(msg)
+        mcp.settings.host = args.host
+        mcp.settings.port = args.port
+        if token:
+
+            async def _serve_with_token() -> None:
+                import uvicorn
+
+                app = wrap_with_bearer_token(mcp.streamable_http_app(), token)
+                config = uvicorn.Config(
+                    app,
+                    host=args.host,
+                    port=args.port,
+                    log_level=mcp.settings.log_level.lower(),
+                )
+                server = uvicorn.Server(config)
+                await server.serve()
+
+            anyio.run(_serve_with_token)
+        else:
+            mcp.run(transport="streamable-http")
+        return
+
     mcp.run(transport="stdio")
 
 
