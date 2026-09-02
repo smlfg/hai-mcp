@@ -100,3 +100,11 @@ class ProjectStore:
         mounts[device_id] = record
         self.save(data)
         return record, None
+
+    def list_projects(self) -> list[dict[str, Any]]:
+        data = self.load()
+        out: list[dict[str, Any]] = []
+        for pid in sorted(data.get("projects", {})):
+            mounts = data["projects"][pid].get("mounts", {})
+            out.append({"project_id": pid, "device_ids": sorted(mounts.keys())})
+        return out

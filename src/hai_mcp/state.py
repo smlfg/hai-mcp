@@ -12,6 +12,7 @@ from hai_mcp.config import Config, ensure_hai_home
 from hai_mcp.ids import validate_intake_id
 from hai_mcp.locking import mission_state_lock
 from hai_mcp.mission import MissionEngine, _new_id, _utc_now
+from hai_mcp.projects import ProjectStore
 from hai_mcp.paths import (
     PathError,
     assert_under,
@@ -90,6 +91,10 @@ class ControlPlane:
             "hai_home_writable": os.access(home, os.W_OK),
             "model_calls": False,
             "max_active_lanes": self.cfg.max_active_lanes,
+            "kernel": "contract_kernel",
+            "authenticated_owner": False,
+            "semantic_verification": False,
+            "projects": ProjectStore(home).list_projects(),
         }
         if project_path:
             try:

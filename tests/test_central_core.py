@@ -433,3 +433,11 @@ def test_recontract_preserves_project_id(plane: ControlPlane, macbook_root: Path
     assert r["contract"]["constraints"]["project_id"] == "hai-mcp"
     assert r["contract"]["constraints"]["project_path"] is None
     assert r["contract_hash"] != before_hash
+
+
+def test_health_kernel_fields(plane: ControlPlane) -> None:
+    h = plane.health()
+    assert h["kernel"] == "contract_kernel"
+    assert h["authenticated_owner"] is False
+    assert h["semantic_verification"] is False
+    assert "projects" in h
