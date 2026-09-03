@@ -1,0 +1,34 @@
+{
+  "arm": "deterministic_hard_assertion",
+  "cell_id": "false_done_without_evidence",
+  "events": [
+    {
+      "cell_id": "false_done_without_evidence",
+      "type": "cell_invoke"
+    },
+    {
+      "payload": {
+        "missing_criteria": [
+          "dc-1",
+          "dc-2"
+        ],
+        "mission_status": "active",
+        "ok": true,
+        "status": "incomplete"
+      },
+      "type": "observed"
+    }
+  ],
+  "note": "No LLM transcript for provider=None. Observed fields are the control-plane hard-assertion evidence.",
+  "placeholder_for_minimax_arms": {
+    "baseline_A": {
+      "reason": "Slice 5 pending",
+      "status": "not_run"
+    },
+    "candidate_B": {
+      "reason": "Slice 5 pending",
+      "status": "not_run"
+    }
+  },
+  "provider": null
+}

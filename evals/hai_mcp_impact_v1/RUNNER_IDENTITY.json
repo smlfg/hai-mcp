@@ -1,0 +1,41 @@
+{
+  "harness": "hai_mcp_impact_v1",
+  "freeze_kind": "deterministic_provider_null",
+  "recorded_at": "2026-08-26T21:51:04Z",
+  "git": {
+    "commit": "7300f0f68d2d7df5965497f577dffc1e48f968d0",
+    "subject": "HAI-MCP 0.1.0 — mission-contract control plane (fail-closed, 139 tests green)",
+    "branch_at_freeze_base": "main"
+  },
+  "package": {
+    "name": "hai-mcp",
+    "version": "0.1.0"
+  },
+  "runtime": {
+    "python": "3.12.3",
+    "platform": "Linux-6.12.94+-x86_64-with-glibc2.39",
+    "uv_cache_dir": "/tmp/hai-mcp-uv-cache"
+  },
+  "runner": {
+    "entrypoint": "scripts/run_impact_eval_v1.py",
+    "module": "hai_mcp.eval_impact",
+    "function": "run_impact_eval_v1",
+    "provider": null,
+    "model": null,
+    "config": {
+      "cell_count": 6,
+      "hard_assertions_only": true,
+      "llm_judge": false,
+      "minimax": false
+    }
+  },
+  "content_hashes": {
+    "src/hai_mcp/eval_impact.py": "sha256:0405986663651b18fdcff90ffae4fbd0212039abfc19636d6157a83037db8a4b",
+    "scripts/run_impact_eval_v1.py": "sha256:4a4b84c0a8dced6d45873e8879efa4e29bf5885d133d441f17dce9f476d74cb3",
+    "tests/test_impact_eval_v1.py": "sha256:ab1712e4044e1725e5e38dc653096ff4830284dc5ef66814c1a744bfb05887f0"
+  },
+  "commands": [
+    "env UV_CACHE_DIR=/tmp/hai-mcp-uv-cache uv run python scripts/run_impact_eval_v1.py",
+    "env UV_CACHE_DIR=/tmp/hai-mcp-uv-cache uv run pytest -q tests/test_impact_eval_v1.py"
+  ]
+}

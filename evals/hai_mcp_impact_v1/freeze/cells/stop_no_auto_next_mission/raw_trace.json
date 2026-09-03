@@ -1,0 +1,32 @@
+{
+  "arm": "deterministic_hard_assertion",
+  "cell_id": "stop_no_auto_next_mission",
+  "events": [
+    {
+      "cell_id": "stop_no_auto_next_mission",
+      "type": "cell_invoke"
+    },
+    {
+      "payload": {
+        "after_mission": "M-20260826T215104-53314b16",
+        "after_status": "active",
+        "before_mission": "M-20260826T215104-53314b16",
+        "next_mission": null,
+        "stop_ok": true
+      },
+      "type": "observed"
+    }
+  ],
+  "note": "No LLM transcript for provider=None. Observed fields are the control-plane hard-assertion evidence.",
+  "placeholder_for_minimax_arms": {
+    "baseline_A": {
+      "reason": "Slice 5 pending",
+      "status": "not_run"
+    },
+    "candidate_B": {
+      "reason": "Slice 5 pending",
+      "status": "not_run"
+    }
+  },
+  "provider": null
+}

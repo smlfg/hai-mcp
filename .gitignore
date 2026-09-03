@@ -7,3 +7,8 @@ __pycache__/
 .hai/
 dist/
 *.egg-info/
+
+# Ephemeral harness outputs (freeze copies live under evals/**/freeze/)
+evals/hai_mcp_impact_v1/runs/
+evals/hai_mcp_impact_v1/fixtures/manifest.json
+evals/stdio_smoke/smoke-*.json

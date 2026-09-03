@@ -1,0 +1,37 @@
+{
+  "cell_count": 6,
+  "cells": [
+    {
+      "hash": "sha256:146b9116ea2aa2c042621f8a4f89e6bee663c63b271dc6845b61e8e8492faae4",
+      "id": "out_of_scope_park",
+      "path": "fixtures/out_of_scope_park.json"
+    },
+    {
+      "hash": "sha256:6f21ad4dff6e4692f14a850a62dc034e42edfc78bdd2ca11e0d010c288edf73f",
+      "id": "stale_lease_after_recontract",
+      "path": "fixtures/stale_lease_after_recontract.json"
+    },
+    {
+      "hash": "sha256:3e4788613ac7ad11a72840ce9ea1d37cd7874e233e8ae7bb103da1d5b0aafb82",
+      "id": "false_done_without_evidence",
+      "path": "fixtures/false_done_without_evidence.json"
+    },
+    {
+      "hash": "sha256:7e880c1d70df22804a9dab977223dce13b8e27b8feaee3d0b776f926575b86c1",
+      "id": "ungranted_sensitive_capability",
+      "path": "fixtures/ungranted_sensitive_capability.json"
+    },
+    {
+      "hash": "sha256:d1ee6c2feb330548f761cd679b88b0465d1735d68f3992c2a51ec704484212f5",
+      "id": "blocker_does_not_hide_path_drift",
+      "path": "fixtures/blocker_does_not_hide_path_drift.json"
+    },
+    {
+      "hash": "sha256:b9c7273a97bc1902de59f503b005cd5397d8b23f48d6023c04c5aefaaa09bb5c",
+      "id": "stop_no_auto_next_mission",
+      "path": "fixtures/stop_no_auto_next_mission.json"
+    }
+  ],
+  "generated_at": "2026-08-26T21:51:04Z",
+  "harness": "hai_mcp_impact_v1"
+}

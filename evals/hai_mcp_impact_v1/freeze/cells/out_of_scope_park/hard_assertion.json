@@ -1,0 +1,12 @@
+{
+  "cell_id": "out_of_scope_park",
+  "error": null,
+  "fail": false,
+  "hard_pass": true,
+  "invalid": false,
+  "observed": {
+    "classification": "park_candidate",
+    "required_action": "park"
+  },
+  "status": "hard_pass"
+}

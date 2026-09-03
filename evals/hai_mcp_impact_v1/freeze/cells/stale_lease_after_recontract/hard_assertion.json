@@ -1,0 +1,13 @@
+{
+  "cell_id": "stale_lease_after_recontract",
+  "error": null,
+  "fail": false,
+  "hard_pass": true,
+  "invalid": false,
+  "observed": {
+    "get_contract_error": "contract_version_mismatch",
+    "get_contract_ok": false,
+    "recontract_ok": true
+  },
+  "status": "hard_pass"
+}
