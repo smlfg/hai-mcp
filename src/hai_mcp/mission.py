@@ -20,6 +20,7 @@ from hai_mcp.ids import (
     validate_session_id,
 )
 from hai_mcp.locking import mission_state_lock
+from hai_mcp.owner_gate import OwnerGate
 from hai_mcp.paths import PathError, assert_relative_allowed, assert_under, real_path, require_project_path
 from hai_mcp.projects import ProjectStore, validate_ident
 from hai_mcp.storage import read_json, write_json
@@ -103,6 +104,7 @@ class MissionEngine:
         self.missions_dir.mkdir(parents=True, exist_ok=True)
         self.audit_dir.mkdir(parents=True, exist_ok=True)
         self.parking_dir.mkdir(parents=True, exist_ok=True)
+        self.owner_gate = OwnerGate(self.cfg, audit=self.append_audit)
 
     @property
     def missions_dir(self) -> Path:
@@ -1216,6 +1218,7 @@ class MissionEngine:
         mode: str = "normal",
         owner_ack: Any = False,
         break_glass_marker: Any = False,
+        owner_code: Any = None,
     ) -> dict[str, Any]:
         err = self._reject_mission_id(mission_id)
         if err:
@@ -1262,16 +1265,33 @@ class MissionEngine:
         if not diff:
             return {"ok": False, "error": "invalid_args", "message": "recontract changes produce an empty diff"}
 
-        if owner_ack is not True:
-            return {
-                "ok": False,
-                "error": "owner_gate_required",
-                "status": "pending_owner_confirmation",
-                "owner_ack_required": True,
-                "diff": diff,
-                "mode": mode,
-                "message": "owner_ack=true (literal boolean) required to apply contract changes",
-            }
+        # Owner gate. The diff is shown in both modes so the owner decides on the exact change.
+        if self.cfg.owner_gate == "ack_legacy":
+            if owner_ack is not True:
+                return {
+                    "ok": False,
+                    "error": "owner_gate_required",
+                    "gate": "ack_legacy",
+                    "status": "pending_owner_confirmation",
+                    "owner_ack_required": True,
+                    "diff": diff,
+                    "mode": mode,
+                    "message": "owner_ack=true (literal boolean) required to apply contract changes",
+                }
+            gate_info: dict[str, Any] = {"gate": "ack_legacy"}
+        else:
+            passed, gate_result = self.owner_gate.require(
+                action="recontract",
+                subject={"mission_id": mission_id, "contract_version": version, "mode": mode, "diff": diff},
+                summary=f"Recontract mission {mission_id} v{version} -> v{version + 1} ({mode})",
+                preview={"mission_id": mission_id, "mode": mode, "reason": reason, "diff": diff},
+                owner_code=owner_code,
+            )
+            if not passed:
+                gate_result["diff"] = diff
+                gate_result["mode"] = mode
+                return gate_result
+            gate_info = gate_result
 
         if mode == "break_glass" and break_glass_marker is not True:
             return {
@@ -1317,6 +1337,7 @@ class MissionEngine:
             "mode": mode,
             "reason": reason,
             "revoked_sessions": revoked,
+            "owner_gate": gate_info,
         }
         if mode == "break_glass":
             audit_payload["audit_classification"] = "break_glass"
@@ -1333,6 +1354,7 @@ class MissionEngine:
             "revoked_sessions": revoked,
             "audit_event_id": audit["event_id"],
             "audit_classification": audit_payload.get("audit_classification"),
+            "owner_gate": gate_info,
         }
 
     def _verify_evidence_path(
@@ -1406,6 +1428,7 @@ class MissionEngine:
         closure: str,
         owner_ack: Any = False,
         device_id: str | None = None,
+        owner_code: Any = None,
     ) -> dict[str, Any]:
         err = self._reject_mission_id(mission_id)
         if err:
@@ -1454,14 +1477,34 @@ class MissionEngine:
                 }
 
         if closure == "abandoned":
-            if owner_ack is not True:
-                return {
-                    "ok": False,
-                    "error": "owner_gate_required",
-                    "message": "abandon requires owner_ack=true (literal boolean)",
-                }
-            if not outcome_summary:
-                return {"ok": False, "error": "invalid_args", "message": "abandon reason required in outcome_summary"}
+            if self.cfg.owner_gate == "ack_legacy":
+                if owner_ack is not True:
+                    return {
+                        "ok": False,
+                        "error": "owner_gate_required",
+                        "gate": "ack_legacy",
+                        "message": "abandon requires owner_ack=true (literal boolean)",
+                    }
+                if not outcome_summary:
+                    return {"ok": False, "error": "invalid_args", "message": "abandon reason required in outcome_summary"}
+                gate_info: dict[str, Any] = {"gate": "ack_legacy"}
+            else:
+                if not outcome_summary:
+                    return {"ok": False, "error": "invalid_args", "message": "abandon reason required in outcome_summary"}
+                passed, gate_result = self.owner_gate.require(
+                    action="abandon_mission",
+                    subject={"mission_id": mission_id, "contract_version": version, "closure": "abandoned"},
+                    summary=f"Abandon mission {mission_id} (contract v{version})",
+                    preview={
+                        "mission_id": mission_id,
+                        "objective": str(contract.get("objective", ""))[:200],
+                        "abandon_reason": outcome_summary[:200],
+                    },
+                    owner_code=owner_code,
+                )
+                if not passed:
+                    return gate_result
+                gate_info = gate_result
             with mission_state_lock(self.cfg.hai_home):
                 revoked = self.revoke_all_sessions(mission_id, reason="abandoned")
                 meta = self.load_mission_meta(mission_id) or meta
@@ -1472,7 +1515,12 @@ class MissionEngine:
                 self.save_active_pointer(None, "none")
             audit = self.append_audit(
                 "mission_abandoned",
-                {"mission_id": mission_id, "reason": outcome_summary, "revoked_sessions": revoked},
+                {
+                    "mission_id": mission_id,
+                    "reason": outcome_summary,
+                    "revoked_sessions": revoked,
+                    "owner_gate": gate_info,
+                },
             )
             return {
                 "ok": True,
@@ -1482,6 +1530,7 @@ class MissionEngine:
                 "revoked_sessions": revoked,
                 "audit_event_id": audit["event_id"],
                 "next_mission": None,
+                "owner_gate": gate_info,
             }
 
         if closure != "completed":

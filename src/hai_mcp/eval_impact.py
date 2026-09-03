@@ -28,7 +28,18 @@ def _sha256_file(path: Path) -> str:
 
 def _plane(hai_home: Path) -> ControlPlane:
     os.environ["HAI_HOME"] = str(hai_home)
-    return ControlPlane(Config(hai_home=hai_home))
+    # Nonce gate with the file channel; the owner directory sits NEXT TO hai_home, never inside it.
+    return ControlPlane(Config(hai_home=hai_home, owner_home=hai_home.parent / "owner_home"))
+
+
+def _owner_relays_code(plane: ControlPlane, pending: dict[str, Any]) -> str:
+    """Play the human: read the delivered owner file and hand the code to the agent.
+
+    The plane (agent side) only ever sees the hash; this helper is the out-of-band channel.
+    """
+    path = plane.cfg.resolved_owner_home() / f"{pending['challenge_id']}.txt"
+    first_line = path.read_text(encoding="utf-8").splitlines()[0]
+    return first_line.split("HAI owner code:", 1)[1].strip()
 
 
 def _open_mission(plane: ControlPlane, project: Path) -> dict[str, Any]:
@@ -81,17 +92,22 @@ def cell_stale_lease_after_recontract(plane: ControlPlane, project: Path) -> dic
     opened = _open_mission(plane, project)
     auth = _authorize(plane, opened)
     sid = auth["session_id"]
-    recon = plane.recontract(
+    recontract_args = dict(
         mission_id=opened["mission_id"],
         contract_version=opened["contract_version"],
         reason="narrow objective for eval",
         changes={"objective": "Implement only drift classifier unit tests"},
         mode="normal",
-        owner_ack=True,
     )
+    # 1) the agent asks; owner_ack=True alone must NOT be enough under the nonce gate
+    pending = plane.recontract(**recontract_args, owner_ack=True)
+    # 2) the owner relays the delivered code; 3) the agent presents it
+    recon = plane.recontract(**recontract_args, owner_code=_owner_relays_code(plane, pending))
     got = plane.get_contract(sid)
     ok = (
-        recon.get("ok") is True
+        pending.get("ok") is False
+        and pending.get("error") == "owner_gate_required"
+        and recon.get("ok") is True
         and got.get("ok") is False
         and got.get("error") in {"lease_revoked", "contract_version_mismatch", "mission_not_active"}
     )
@@ -101,6 +117,7 @@ def cell_stale_lease_after_recontract(plane: ControlPlane, project: Path) -> dic
     return {
         "hard_pass": ok,
         "observed": {
+            "owner_ack_alone_rejected": pending.get("ok") is False,
             "recontract_ok": recon.get("ok"),
             "get_contract_ok": got.get("ok"),
             "get_contract_error": got.get("error"),

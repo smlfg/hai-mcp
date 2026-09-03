@@ -15,7 +15,12 @@ from hai_mcp.state import ControlPlane
 @pytest.fixture
 def plane(tmp_path: Path) -> ControlPlane:
     home = tmp_path / "hai_home"
-    return ControlPlane(Config(hai_home=home))
+    # ack_legacy + a confined owner_home: this suite predates the nonce owner gate and
+    # exercises owner_ack=True directly; nonce-gate behavior itself is covered by
+    # tests/test_owner_nonce_gate.py. Keep any owner-channel writes inside tmp_path.
+    return ControlPlane(
+        Config(hai_home=home, owner_gate="ack_legacy", owner_home=tmp_path / "owner_home")
+    )
 
 
 @pytest.fixture
