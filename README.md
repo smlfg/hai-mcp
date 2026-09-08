@@ -1,8 +1,14 @@
 # HAI-MCP
 
-Model-agnostic **Human-Agent Interface** control plane as an MCP server.
+HAI-MCP is the open-source MCP control-plane implementation of **Human Agent Interface (HAI)**, created by **Samuel Fleig**.
+
+Human Agent Interface is an approach for keeping agentic AI work observable, bounded, owner-gated, and evidence-based so a human can still own the work. HAI-MCP implements that approach as a model-agnostic Model Context Protocol (MCP) server.
 
 Any client (Claude Code, Codex, Cursor, Grok, OpenCode, Hermes, …) can use the same tools. The server never calls an LLM.
+
+Canonical website: https://www.human-agent-interface.com/
+
+About Samuel Fleig: https://www.human-agent-interface.com/samuel/
 
 ## Install / run
 
