@@ -78,17 +78,25 @@ def hai_propose_next_step(project_path: str, content: str) -> str:
 @mcp.tool()
 def hai_accept_next_step(
     project_path: str,
-    owner_ack: Any,
-    reason: str,
+    owner_code: str | None = None,
+    reason: str | None = None,
     content: str | None = None,
+    owner_ack: Any = False,
 ) -> str:
-    """Promote proposed (or provided) content to canonical NEXT_STEP.md. Requires owner_ack=true + reason."""
+    """Promote proposed (or provided) content to canonical NEXT_STEP.md — owner-gated.
+
+    Default gate (nonce): call once WITHOUT owner_code; a one-time code is delivered to the
+    owner (never to this client). Ask the owner for it and call again with owner_code=<code>.
+    The code is bound to the exact content and is single-use. Legacy gate (ack_legacy):
+    owner_ack=true + reason.
+    """
     return _json(
         get_control_plane().accept_next_step(
             project_path,
             owner_ack=owner_ack,
             reason=reason,
             content=content,
+            owner_code=owner_code,
         )
     )
 
@@ -240,8 +248,13 @@ def hai_recontract(
     owner_ack: Any = False,
     mode: str = "normal",
     break_glass_marker: Any = False,
+    owner_code: str | None = None,
 ) -> str:
-    """Apply a visible field-level contract diff. Requires owner_ack=true; revokes all leases."""
+    """Apply a visible field-level contract diff; revokes all leases. Owner-gated.
+
+    First call (no owner_code) returns the diff and delivers a one-time code to the owner;
+    call again with owner_code=<code from the owner>. Legacy gate: owner_ack=true.
+    """
     return _json(
         get_control_plane().recontract(
             mission_id=mission_id,
@@ -251,6 +264,7 @@ def hai_recontract(
             mode=mode,
             owner_ack=owner_ack,
             break_glass_marker=break_glass_marker,
+            owner_code=owner_code,
         )
     )
 
@@ -264,8 +278,13 @@ def hai_close_mission(
     evidence: dict[str, Any] | None = None,
     owner_ack: Any = False,
     device_id: str | None = None,
+    owner_code: str | None = None,
 ) -> str:
-    """Complete with verified per-criterion evidence, or abandon with owner_ack and reason."""
+    """Complete with verified per-criterion evidence, or abandon (owner-gated).
+
+    Abandon: first call delivers a one-time code to the owner; call again with owner_code.
+    Legacy gate: owner_ack=true.
+    """
     return _json(
         get_control_plane().close_mission(
             mission_id=mission_id,
@@ -275,6 +294,7 @@ def hai_close_mission(
             closure=closure,
             owner_ack=owner_ack,
             device_id=device_id,
+            owner_code=owner_code,
         )
     )
 
@@ -388,14 +408,20 @@ def hai_stop(
     loop_closed: bool,
     clearer: str,
     agency_gained: str,
+    manual_practice: list[str] | None = None,
 ) -> str:
-    """Hard day terminal: record the three answers, invalidate active leases; no next-day plan. Missions are not closed."""
+    """Hard day terminal: record the three answers, invalidate active leases; no next-day plan. Missions are not closed.
+
+    manual_practice: what the owner did BY HAND today (e.g. "read the auth diff",
+    "ran pytest", "wrote the date regex") — the currency logbook for verification skills.
+    """
     return _json(
         get_control_plane().stop_day(
             day=day,
             loop_closed=loop_closed,
             clearer=clearer,
             agency_gained=agency_gained,
+            manual_practice=manual_practice,
         )
     )
 

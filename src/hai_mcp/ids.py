@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 
 # \Z (not $) so a trailing newline cannot slip past — Python's $ matches before a final \n.
-_GENERATED_ID_RE = re.compile(r"\A(M|S|P|A|I)-\d{8}T\d{6}-[0-9a-f]{8}\Z")
+_GENERATED_ID_RE = re.compile(r"\A(M|S|P|A|I|C)-\d{8}T\d{6}-[0-9a-f]{8}\Z")
 
 _PREFIX_LABELS = {
     "M": "mission_id",
@@ -11,6 +11,7 @@ _PREFIX_LABELS = {
     "P": "parking_id",
     "A": "audit_id",
     "I": "intake_id",
+    "C": "challenge_id",
 }
 
 

@@ -12,7 +12,9 @@ from hai_mcp.state import ControlPlane
 @pytest.fixture
 def plane(tmp_path: Path) -> ControlPlane:
     home = tmp_path / "hai_home"
-    return ControlPlane(Config(hai_home=home))
+    # These tests exercise the legacy honor-system gate explicitly; the default gate is
+    # 'nonce' and is covered by tests/test_owner_nonce_gate.py.
+    return ControlPlane(Config(hai_home=home, owner_gate="ack_legacy"))
 
 
 @pytest.fixture

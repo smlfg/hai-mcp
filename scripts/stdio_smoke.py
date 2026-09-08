@@ -59,9 +59,11 @@ async def _call(session: ClientSession, name: str, arguments: dict[str, Any]) ->
     return json.loads(text)
 
 
-async def run_smoke(*, hai_home: Path, project: Path) -> dict[str, Any]:
+async def run_smoke(*, hai_home: Path, project: Path, owner_home: Path) -> dict[str, Any]:
     steps: list[dict[str, Any]] = []
-    env = {**os.environ, "HAI_HOME": str(hai_home)}
+    # The owner channel must be isolated too: under the default nonce gate the smoke's
+    # accept call issues a challenge, and that code must never land in the live ~/.hai-owner.
+    env = {**os.environ, "HAI_HOME": str(hai_home), "HAI_OWNER_HOME": str(owner_home)}
     command = "uv"
     args = ["run", "--directory", str(REPO), "hai-mcp"]
     params = StdioServerParameters(command=command, args=args, env=env)
@@ -223,9 +225,11 @@ async def run_smoke(*, hai_home: Path, project: Path) -> dict[str, Any]:
         "command": [command, *args],
         "env_boundary": {
             "HAI_HOME": str(hai_home),
+            "HAI_OWNER_HOME": str(owner_home),
             "project_path": str(project),
             "cwd": str(REPO),
             "touches_live_dot_hai": False,
+            "touches_live_dot_hai_owner": False,
         },
         "steps": steps,
     }
@@ -250,16 +254,23 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="Isolated HAI_HOME (default: fresh /tmp dir)",
     )
+    parser.add_argument(
+        "--owner-home",
+        type=Path,
+        default=None,
+        help="Isolated HAI_OWNER_HOME (default: <hai-home>-owner, i.e. next to it, never inside)",
+    )
     args = parser.parse_args(argv)
 
     hai_home = args.hai_home or Path(tempfile.mkdtemp(prefix="hai-mcp-stdio-smoke-"))
     hai_home.mkdir(parents=True, exist_ok=True)
+    owner_home = args.owner_home or hai_home.parent / f"{hai_home.name}-owner"
     project = hai_home / "project"
     project.mkdir(parents=True, exist_ok=True)
     (project / "out.md").write_text("smoke\n", encoding="utf-8")
 
     try:
-        payload = asyncio.run(run_smoke(hai_home=hai_home, project=project))
+        payload = asyncio.run(run_smoke(hai_home=hai_home, project=project, owner_home=owner_home))
     except Exception as exc:  # noqa: BLE001 — smoke must record failure
         payload = {
             "ok": False,

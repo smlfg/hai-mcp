@@ -18,7 +18,7 @@
 | `hai_park` | inbox only | none |
 | `hai_set_focus` | ACTIVE_CONTEXT | soft: max 2 ACTIVE |
 | `hai_propose_next_step` | NEXT_STEP.proposed.md | none |
-| `hai_accept_next_step` | NEXT_STEP.md | **owner_ack=true + reason** |
+| `hai_accept_next_step` | NEXT_STEP.md | **owner gate**: one-time code from the owner channel, bound to the body (`ack_legacy`: owner_ack=true + reason) |
 | `hai_checkpoint` | history/checkpoints | none |
 | `hai_recover` | no (read + advice) | none |
 | `hai_open_mission` | mission + contract v1 | valid finite contract; no second active mission |
@@ -27,12 +27,23 @@
 | `hai_get_contract` | no | valid non-expired session lease |
 | `hai_check_activity` | audit only | valid session lease |
 | `hai_park_item` | parking record | rationale required; no execution right |
-| `hai_recontract` | new contract version + lease revocation | **owner_ack=true + reason**; break_glass needs marker |
-| `hai_close_mission` | terminal mission state + lease revocation | completed: verified evidence per criterion; abandoned: **owner_ack=true + reason** |
+| `hai_recontract` | new contract version + lease revocation | **owner gate**: one-time code bound to the diff (`ack_legacy`: owner_ack=true); reason required; break_glass needs marker |
+| `hai_close_mission` | terminal mission state + lease revocation | completed: verified evidence per criterion; abandoned: **owner gate** (one-time code; `ack_legacy`: owner_ack=true) + reason |
+| `hai_intake` | intake record only | none |
+| `hai_distill` | decision + next step (parks the rest) | none |
+| `hai_mission_start` | mission + contract v1 | thin wrapper over `hai_open_mission`; same gate |
+| `hai_drift_check` | audit only | thin wrapper over `hai_check_activity`; valid session lease |
+| `hai_proof` | terminal mission state (completed) | thin wrapper over `hai_close_mission`; verified evidence per criterion |
+| `hai_stop` | day-stop record + lease invalidation | none (does not close missions) |
+
+## Owner gate
+
+The owner is a separate principal. Default mode `nonce`: the server delivers a one-time code through an owner channel the client cannot read; the client can pass the gate only with a code a human relayed. `ack_legacy` keeps the old self-asserted `owner_ack`. Full contract: `docs/OWNER_GATE.md`.
 
 ## Paths
 
 - `HAI_HOME` (env, default `~/.hai`)
+- `HAI_OWNER_HOME` (env, default `~/.hai-owner`) — owner channel `file`; never inside `HAI_HOME`
 - Logical projects: `HAI_HOME/core/projects.json` (`project_id` + per-device `mounts`)
 - Project artifacts: `<project_path>/Projek-Managment/` (legacy) or device mount + relative prefixes when `project_id` is set
 - All writes resolved and confined
@@ -65,6 +76,9 @@ Structured JSON in tool result with `ok: false` and `error` code:
 - `review_required`
 - `parallel_session_denied`
 - `device_mount_required`
+- `owner_channel_unavailable` (owner code could not be delivered; gate stays closed)
+
+`owner_gate_required` carries `detail`: `malformed_owner_code`, `invalid_owner_code`, `no_pending_challenge`; or `status: pending_owner_code` with the `challenge_id`. See `docs/OWNER_GATE.md`.
 
 ## Transport note
 

@@ -9,7 +9,8 @@
         "hai-mcp"
       ],
       "env": {
-        "HAI_HOME": "/home/smlflg/.hai"
+        "HAI_HOME": "/home/smlflg/.hai",
+        "HAI_OWNER_HOME": "/home/smlflg/.hai-owner"
       }
     }
   }

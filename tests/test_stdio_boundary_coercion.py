@@ -28,7 +28,7 @@ async def _with_stdio(tmp_path: Path):
     params = StdioServerParameters(
         command="uv",
         args=["run", "--directory", str(REPO), "hai-mcp"],
-        env={**os.environ},
+        env={**os.environ, "HAI_OWNER_GATE": "ack_legacy"},  # legacy gate under test; nonce has its own stdio test
     )
     return project, params
 

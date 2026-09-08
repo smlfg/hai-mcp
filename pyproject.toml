@@ -5,7 +5,7 @@ description = "Model-agnostic HAI control-plane MCP server"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "mcp>=1.9.0",
+    "mcp>=1.9.0,<2",
 ]
 
 [project.optional-dependencies]

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+import json
 import os
 from pathlib import Path
 
@@ -12,7 +13,9 @@ from hai_mcp.state import ControlPlane
 
 @pytest.fixture
 def plane(tmp_path: Path) -> ControlPlane:
-    return ControlPlane(Config(hai_home=tmp_path / "hai_home"))
+    # These tests exercise the legacy honor-system gate explicitly; the default gate is
+    # 'nonce' and is covered by tests/test_owner_nonce_gate.py.
+    return ControlPlane(Config(hai_home=tmp_path / "hai_home", owner_gate="ack_legacy"))
 
 
 @pytest.fixture
@@ -284,3 +287,21 @@ def test_additional_seven_tools_registered(tmp_path: Path) -> None:
     }
     assert additional_seven.issubset(registered)
     assert core_seven.issubset(registered)
+
+
+def test_stop_records_manual_practice_logbook(plane: ControlPlane) -> None:
+    r = plane.stop_day(
+        day="2026-09-02",
+        loop_closed=True,
+        clearer="yes",
+        agency_gained="read the gate diff myself",
+        manual_practice=["git diff src/hai_mcp/owner_gate.py", "  ", "ran uv run pytest -q"],
+    )
+    assert r["ok"] is True
+    record = json.loads(Path(r["path"]).read_text(encoding="utf-8"))
+    assert record["manual_practice"] == ["git diff src/hai_mcp/owner_gate.py", "ran uv run pytest -q"]
+    # omitted → empty log, still a valid stop
+    r2 = plane.stop_day(day="2026-09-03", loop_closed=False, clearer="no", agency_gained="-")
+    assert json.loads(Path(r2["path"]).read_text(encoding="utf-8"))["manual_practice"] == []
+    bad = plane.stop_day(day="2026-09-04", loop_closed=True, clearer="", agency_gained="", manual_practice="git")
+    assert bad["ok"] is False and bad["error"] == "invalid_args"
