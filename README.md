@@ -14,6 +14,8 @@ mcp-name: io.github.smlfg/hai-mcp
   for the <strong>Human Agent Interface (HAI)</strong> approach
 </p>
 
+Human Agent Interface is an approach to a problem that only appears now: agents let a person build what they could not build before, while the same delegation quietly removes their ability to verify it, decide about it, and finish it. HAI keeps the work observable, bounded, owner-gated and evidence-based — and treats the owner's own capability the same way: measured and kept current, never assumed. HAI-MCP implements that approach as a model-agnostic Model Context Protocol (MCP) server.
+
 <p align="center">
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
   <a href="pyproject.toml"><img alt="Python ≥ 3.12" src="https://img.shields.io/badge/python-≥3.12-3776AB.svg"></a>
