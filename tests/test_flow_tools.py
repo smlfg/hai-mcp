@@ -167,7 +167,6 @@ def test_drift_check_wrapper_flags_out_of_scope_path(tmp_path: Path, monkeypatch
             expected_result="y",
             duration_minutes=30,
             criterion_ids=["dc-1"],
-            request_id="flow-drift-wrapper",
         )
     )
     r = json.loads(

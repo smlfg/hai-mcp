@@ -155,7 +155,6 @@ def hai_authorize_session(
     expected_result: str,
     duration_minutes: StrictInt,
     criterion_ids: list[str],
-    request_id: str,
     capabilities: list[str] | None = None,
     device_id: str | None = None,
     harness_id: str | None = None,
@@ -196,40 +195,6 @@ def hai_bind_project(
             reason=reason,
         )
     )
-
-
-@mcp.tool()
-def hai_learning_start(topic: str, intended_output_path: str) -> str:
-    """Start one server-timed Learning Block without pausing existing agent leases."""
-    return _json(get_control_plane().learning_start(topic, intended_output_path))
-
-
-@mcp.tool()
-def hai_learning_complete(
-    block_id: str,
-    own_activity: str,
-    learned: str,
-    open_question: str,
-    evidence_paths: list[str],
-    owner_ack: StrictBool,
-) -> str:
-    """Complete a Learning Block with reflection and verified local evidence."""
-    return _json(
-        get_control_plane().learning_complete(
-            block_id=block_id,
-            own_activity=own_activity,
-            learned=learned,
-            open_question=open_question,
-            evidence_paths=evidence_paths,
-            owner_ack=owner_ack,
-        )
-    )
-
-
-@mcp.tool()
-def hai_learning_abandon(block_id: str, reason: str, owner_ack: StrictBool) -> str:
-    """Abandon an active Learning Block."""
-    return _json(get_control_plane().learning_abandon(block_id, reason, owner_ack))
 
 
 @mcp.tool()

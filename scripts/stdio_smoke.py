@@ -38,9 +38,6 @@ EXPECTED_TOOLS = frozenset(
         "hai_open_mission",
         "hai_bind_project",
         "hai_authorize_session",
-        "hai_learning_start",
-        "hai_learning_complete",
-        "hai_learning_abandon",
         "hai_get_contract",
         "hai_check_activity",
         "hai_park_item",
@@ -182,7 +179,6 @@ async def run_smoke(*, hai_home: Path, project: Path, owner_home: Path) -> dict[
                         "expected_result": "out.md",
                         "duration_minutes": 30,
                         "criterion_ids": ["c1"],
-                        "request_id": "stdio-smoke-writer-1",
                         "capabilities": ["read", "write"],
                     },
                 )

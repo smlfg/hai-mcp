@@ -65,7 +65,7 @@ def test_stdio_smoke_script_writes_artifact(tmp_path: Path) -> None:
     live_owner_after = sorted(p.name for p in live_owner.glob("*")) if live_owner.is_dir() else None
     assert live_owner_after == live_owner_before
     tools_step = next(s for s in payload["steps"] if s["step"] == "list_tools")
-    assert tools_step["tool_count"] == 27
+    assert tools_step["tool_count"] == 24
     assert tools_step["missing"] == []
     close_step = next(s for s in payload["steps"] if s["step"] == "hai_close_mission_completed")
     assert close_step["ok"] is True
