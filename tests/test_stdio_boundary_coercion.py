@@ -75,6 +75,43 @@ async def _authorize(
     )
 
 
+def test_stdio_typed_schemas_and_compatible_authorization(tmp_path: Path) -> None:
+    """Clients discover typed inputs and can authorize without a new request ID."""
+
+    async def _run() -> None:
+        project, params = await _with_stdio(tmp_path)
+        async with stdio_client(params) as (read, write):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                listed = await session.list_tools()
+                schemas = {tool.name: tool.inputSchema for tool in listed.tools}
+                for tool, field, expected_type in (
+                    ("hai_authorize_session", "contract_version", "integer"),
+                    ("hai_authorize_session", "duration_minutes", "integer"),
+                    ("hai_read_artifacts", "max_chars", "integer"),
+                    ("hai_accept_next_step", "owner_ack", "boolean"),
+                    ("hai_recontract", "break_glass_marker", "boolean"),
+                    ("hai_check_activity", "declares_blocker", "boolean"),
+                    ("hai_mission_start", "time_limit_hours", "number"),
+                ):
+                    assert schemas[tool]["properties"][field]["type"] == expected_type
+                assert "request_id" not in schemas["hai_authorize_session"]["properties"]
+                assert not any(name.startswith("hai_learning_") for name in schemas)
+                opened = await _open_mission(session, project)
+                assert opened["ok"] is True
+                authorized = await _authorize(
+                    session, opened,
+                    contract_version=opened["contract_version"], duration_minutes=30,
+                )
+                assert authorized["ok"] is True
+                contract = await _call(
+                    session, "hai_get_contract", {"session_id": authorized["session_id"]},
+                )
+                assert contract["ok"] is True
+
+    asyncio.run(_run())
+
+
 def test_stdio_break_glass_marker_integer_fails_closed(tmp_path: Path) -> None:
     """JSON break_glass_marker: 1 must not satisfy break-glass friction."""
 
@@ -354,4 +391,3 @@ def test_stdio_close_mission_owner_ack_integer_fails_closed(tmp_path: Path) -> N
                 assert denied["error"] == "owner_gate_required"
 
     asyncio.run(_run())
-
