@@ -3,15 +3,25 @@ from __future__ import annotations
 import argparse
 import json
 import os
-from typing import Any
+from typing import Annotated, Any
 
 import anyio
 from mcp.server.fastmcp import FastMCP
+from pydantic import Field
 
 from hai_mcp.boundary import strict_optional_time_limit_hours
 from hai_mcp.config import Config, SERVER_NAME
 from hai_mcp.http_transport import http_bind_allowed, http_token_from_env, wrap_with_bearer_token
 from hai_mcp.state import ControlPlane
+
+# The boundary deliberately refuses coercion (see boundary.py): a string "2" must be
+# rejected, never silently become 2. Bare `Any` however advertises a schema with no type
+# at all, so a compliant client is free to serialize an integer as a string — and then the
+# fail-closed check makes the tool permanently unreachable instead of merely strict.
+# These aliases keep the runtime value un-coerced while telling the client what to send.
+StrictInt = Annotated[Any, Field(json_schema_extra={"type": "integer"})]
+StrictBool = Annotated[Any, Field(json_schema_extra={"type": "boolean"})]
+StrictNumber = Annotated[Any, Field(json_schema_extra={"type": "number"})]
 
 mcp = FastMCP(SERVER_NAME)
 
@@ -48,7 +58,7 @@ def hai_get_next_step(project_path: str) -> str:
 
 
 @mcp.tool()
-def hai_read_artifacts(project_path: str, max_chars: Any = 4000) -> str:
+def hai_read_artifacts(project_path: str, max_chars: StrictInt = 4000) -> str:
     """Read-only summary of HAI Projek-Managment run-contract artifacts."""
     return _json(get_control_plane().read_artifacts(project_path, max_chars=max_chars))
 
@@ -81,7 +91,7 @@ def hai_accept_next_step(
     owner_code: str | None = None,
     reason: str | None = None,
     content: str | None = None,
-    owner_ack: Any = False,
+    owner_ack: StrictBool = False,
 ) -> str:
     """Promote proposed (or provided) content to canonical NEXT_STEP.md — owner-gated.
 
@@ -138,13 +148,14 @@ def hai_open_mission(
 @mcp.tool()
 def hai_authorize_session(
     mission_id: str,
-    contract_version: Any,
+    contract_version: StrictInt,
     agent_identity: str,
     role: str,
     contribution: str,
     expected_result: str,
-    duration_minutes: Any,
+    duration_minutes: StrictInt,
     criterion_ids: list[str],
+    request_id: str,
     capabilities: list[str] | None = None,
     device_id: str | None = None,
     harness_id: str | None = None,
@@ -172,7 +183,7 @@ def hai_bind_project(
     project_id: str,
     device_id: str,
     local_path: str,
-    owner_ack: Any,
+    owner_ack: StrictBool,
     reason: str,
 ) -> str:
     """Bind a device-local directory to a logical project_id mount table entry. Requires owner_ack=true + reason."""
@@ -185,6 +196,40 @@ def hai_bind_project(
             reason=reason,
         )
     )
+
+
+@mcp.tool()
+def hai_learning_start(topic: str, intended_output_path: str) -> str:
+    """Start one server-timed Learning Block without pausing existing agent leases."""
+    return _json(get_control_plane().learning_start(topic, intended_output_path))
+
+
+@mcp.tool()
+def hai_learning_complete(
+    block_id: str,
+    own_activity: str,
+    learned: str,
+    open_question: str,
+    evidence_paths: list[str],
+    owner_ack: StrictBool,
+) -> str:
+    """Complete a Learning Block with reflection and verified local evidence."""
+    return _json(
+        get_control_plane().learning_complete(
+            block_id=block_id,
+            own_activity=own_activity,
+            learned=learned,
+            open_question=open_question,
+            evidence_paths=evidence_paths,
+            owner_ack=owner_ack,
+        )
+    )
+
+
+@mcp.tool()
+def hai_learning_abandon(block_id: str, reason: str, owner_ack: StrictBool) -> str:
+    """Abandon an active Learning Block."""
+    return _json(get_control_plane().learning_abandon(block_id, reason, owner_ack))
 
 
 @mcp.tool()
@@ -202,7 +247,7 @@ def hai_check_activity(
     trace_events: list[dict[str, Any]] | None = None,
     activity_kind: str | None = None,
     evidence: dict[str, Any] | None = None,
-    declares_blocker: Any = False,
+    declares_blocker: StrictBool = False,
 ) -> str:
     """Deterministically classify planned or observed activity against the mission contract."""
     return _json(
@@ -242,12 +287,12 @@ def hai_park_item(
 @mcp.tool()
 def hai_recontract(
     mission_id: str,
-    contract_version: Any,
+    contract_version: StrictInt,
     reason: str,
     changes: dict[str, Any],
-    owner_ack: Any = False,
+    owner_ack: StrictBool = False,
     mode: str = "normal",
-    break_glass_marker: Any = False,
+    break_glass_marker: StrictBool = False,
     owner_code: str | None = None,
 ) -> str:
     """Apply a visible field-level contract diff; revokes all leases. Owner-gated.
@@ -272,11 +317,11 @@ def hai_recontract(
 @mcp.tool()
 def hai_close_mission(
     mission_id: str,
-    contract_version: Any,
+    contract_version: StrictInt,
     closure: str,
     outcome_summary: str,
     evidence: dict[str, Any] | None = None,
-    owner_ack: Any = False,
+    owner_ack: StrictBool = False,
     device_id: str | None = None,
     owner_code: str | None = None,
 ) -> str:
@@ -332,7 +377,7 @@ def hai_mission_start(
     artifact: str,
     done_criteria: list[dict[str, Any]],
     owner: str,
-    time_limit_hours: Any = None,
+    time_limit_hours: StrictNumber = None,
     non_goals: list[str] | None = None,
     constraints: dict[str, Any] | None = None,
 ) -> str:
@@ -364,7 +409,7 @@ def hai_drift_check(
     trace_events: list[dict[str, Any]] | None = None,
     activity_kind: str | None = None,
     evidence: dict[str, Any] | None = None,
-    declares_blocker: Any = False,
+    declares_blocker: StrictBool = False,
 ) -> str:
     """Lightweight mismatch check against the mission contract. Thin wrapper over hai_check_activity."""
     return _json(
@@ -384,7 +429,7 @@ def hai_drift_check(
 @mcp.tool()
 def hai_proof(
     mission_id: str,
-    contract_version: Any,
+    contract_version: StrictInt,
     evidence: dict[str, Any],
     outcome_summary: str,
     device_id: str | None = None,
