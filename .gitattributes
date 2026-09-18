@@ -1,0 +1,37 @@
+# Git attributes — enforce consistent line endings and language detection.
+
+# Default: Unix line endings for everything.
+* text=auto eol=lf
+
+# Shell scripts and Python must use LF.
+*.sh        text eol=lf
+*.py        text eol=lf
+*.pyi       text eol=lf
+
+# Windows-style sources must keep CRLF.
+*.bat       text eol=crlf
+*.cmd       text eol=crlf
+*.ps1       text eol=crlf
+
+# Markdown / config: LF, but normalize on checkout.
+*.md        text eol=lf
+*.toml      text eol=lf
+*.yaml      text eol=lf
+*.yml       text eol=lf
+*.json      text eol=lf
+
+# Lockfiles and generated docs stay untouched.
+uv.lock     text eol=lf -diff
+docs/*      linguist-documentation
+*.svg       linguist-documentation
+
+# Binary assets: mark as binary, no CRLF conversion.
+*.png       binary
+*.jpg       binary
+*.jpeg      binary
+*.gif       binary
+*.ico       binary
+*.pdf       binary
+
+# Exclude generated export from language stats.
+uv.lock     export-ignore
