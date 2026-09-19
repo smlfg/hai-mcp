@@ -55,7 +55,7 @@ def test_mcp_labels_reach_all_three_native_prompt_requests(tmp_path: Path, clien
                 assert (await call("hai_accept_next_step", accept))["status"] == "owner_approved"
                 assert (await call("hai_accept_next_step", accept))["ok"]
                 opened = await call("hai_open_mission", {
-                    "objective": "Dialog verbessern", "artifact": "Dialog", "done_criteria": [{"id": "dc-1", "description": "Lesbar"}],
+                    "objective": "Dialog verbessern", "artifact": "Dialog", "project_path": str(project), "done_criteria": [{"id": "dc-1", "description": "Lesbar"}],
                     "non_goals": ["Server ändern"], "constraints": {"project_path": str(project),
                     "allowed_paths": ["src"], "capabilities": ["read", "write"], "time_limit_hours": 2}, "owner": "Samuel"})
                 assert opened["ok"], opened

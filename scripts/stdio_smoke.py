@@ -142,6 +142,7 @@ async def run_smoke(*, hai_home: Path, project: Path, owner_home: Path) -> dict[
                         {"id": "c1", "description": "out.md exists", "evidence": "file"}
                     ],
                     "owner": "smoke",
+                    "project_path": str(project),
                     "time_limit_hours": 1,
                     "constraints": {
                         "project_path": str(project),

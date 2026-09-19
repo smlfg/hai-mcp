@@ -349,6 +349,20 @@ class MissionEngine:
         stored_project_id: str | None = None
         stored_project_path: str | None = None
         raw_project_id = constraints.get("project_id")
+        path_required = raw_project_id is None or require_mount_fields
+        if path_required:
+            if not project_path or not str(project_path).strip():
+                issues.append("project_path is required")
+            else:
+                try:
+                    require_project_path(str(project_path))
+                except PathError as exc:
+                    issues.append(exc.message)
+        elif project_path and str(project_path).strip():
+            try:
+                require_project_path(str(project_path))
+            except PathError as exc:
+                issues.append(exc.message)
         if raw_project_id is not None:
             if not str(raw_project_id).strip():
                 issues.append("project_id must not be empty")
@@ -366,19 +380,8 @@ class MissionEngine:
                         ok, msg = validate_ident(str(device_id), "device_id")
                         if not ok:
                             issues.append(msg)
-                    if not project_path:
-                        issues.append("project_path is required for first mount when project_id is set")
-                    elif stored_project_id:
-                        try:
-                            require_project_path(str(project_path))
-                        except PathError as exc:
-                            issues.append(exc.message)
                 stored_project_path = None
-        elif project_path:
-            try:
-                require_project_path(str(project_path))
-            except PathError as exc:
-                issues.append(exc.message)
+        elif project_path and str(project_path).strip():
             stored_project_path = str(project_path)
 
         body = {

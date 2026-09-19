@@ -309,6 +309,9 @@ def hai_open_mission(
         Field(description="List of criteria objects, each with an id and a description."),
     ],
     owner: Annotated[str, Field(description="Owner principal accountable for the mission.")],
+    project_path: Annotated[
+        str, Field(description="Existing project directory the mission is bound to (required).")
+    ],
     non_goals: Annotated[
         list[str] | None, Field(description="Optional list of explicit non-goals.")
     ] = None,
@@ -339,13 +342,15 @@ def hai_open_mission(
     active mission can be superseded with supersede_orphan=true and a reason under the owner
     gate. Purely additive when no mission is active; returns JSON with ok or error.
     """
+    merged = dict(constraints or {})
+    merged["project_path"] = project_path
     return _json(
         get_control_plane().open_mission(
             objective=objective,
             artifact=artifact,
             done_criteria=done_criteria,
             non_goals=non_goals,
-            constraints=constraints,
+            constraints=merged,
             owner=owner,
             supersede_orphan=supersede_orphan,
             supersede_reason=supersede_reason,
@@ -721,6 +726,9 @@ def hai_mission_start(
         Field(description="List of criteria objects, each with an id and a description."),
     ],
     owner: Annotated[str, Field(description="Owner principal accountable for the mission.")],
+    project_path: Annotated[
+        str, Field(description="Existing project directory the mission is bound to (required).")
+    ],
     time_limit_hours: Annotated[
         StrictNumber, Field(description="Optional finite time limit in hours (>= 1).")
     ] = None,
@@ -739,6 +747,7 @@ def hai_mission_start(
     JSON with ok or error.
     """
     merged = dict(constraints or {})
+    merged["project_path"] = project_path
     if time_limit_hours is not None:
         tl, err = strict_optional_time_limit_hours(time_limit_hours)
         if err:

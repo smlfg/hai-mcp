@@ -42,6 +42,7 @@ async def _open_mission(session: ClientSession, project: Path) -> dict:
             "artifact": "tests/test_stdio_boundary_coercion.py green",
             "done_criteria": [{"id": "dc-1", "description": "stdio coercion tests pass"}],
             "owner": "samuel",
+            "project_path": str(project),
             "constraints": {
                 "project_path": str(project),
                 "allowed_paths": ["src/", "tests/"],
@@ -93,8 +94,12 @@ def test_stdio_typed_schemas_and_compatible_authorization(tmp_path: Path) -> Non
                     ("hai_recontract", "break_glass_marker", "boolean"),
                     ("hai_check_activity", "declares_blocker", "boolean"),
                     ("hai_mission_start", "time_limit_hours", "number"),
+                    ("hai_open_mission", "project_path", "string"),
+                    ("hai_mission_start", "project_path", "string"),
                 ):
                     assert schemas[tool]["properties"][field]["type"] == expected_type
+                for tool in ("hai_open_mission", "hai_mission_start"):
+                    assert "project_path" in schemas[tool]["required"]
                 assert "request_id" not in schemas["hai_authorize_session"]["properties"]
                 assert not any(name.startswith("hai_learning_") for name in schemas)
                 opened = await _open_mission(session, project)
@@ -302,6 +307,7 @@ def test_stdio_time_limit_hours_string_rejected(tmp_path: Path) -> None:
                         "artifact": "probe artifact",
                         "done_criteria": [{"id": "dc-1", "description": "x"}],
                         "owner": "samuel",
+                        "project_path": str(project),
                         "time_limit_hours": "8",
                     },
                 )

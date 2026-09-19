@@ -129,6 +129,7 @@ def test_mission_start_wrapper_opens_canonical_contract(tmp_path: Path, monkeypa
             artifact="tests/green.py",
             done_criteria=_criteria(),
             owner="samuel",
+            project_path=str(project),
             time_limit_hours=2,
             constraints={"project_path": str(project), "allowed_paths": ["tests/"]},
         )
@@ -154,6 +155,7 @@ def test_drift_check_wrapper_flags_out_of_scope_path(tmp_path: Path, monkeypatch
             artifact="tests/x.py",
             done_criteria=_criteria(),
             owner="samuel",
+            project_path=str(project),
             constraints={"project_path": str(project), "allowed_paths": ["tests/"]},
         )
     )
