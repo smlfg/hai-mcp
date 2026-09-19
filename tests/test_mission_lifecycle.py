@@ -9,8 +9,9 @@ import pytest
 
 from hai_mcp.config import Config
 from hai_mcp.ids import IdentifierError
-from hai_mcp.mission import MissionEngine, contract_hash
+from hai_mcp.mission import MissionEngine, _new_id, _utc_now, contract_hash
 from hai_mcp.state import ControlPlane
+from hai_mcp.storage import write_json
 
 
 @pytest.fixture
@@ -68,6 +69,39 @@ def test_open_mission_happy_path(plane: ControlPlane, project: Path) -> None:
     assert r["contract_hash"].startswith("sha256:")
     assert r["contract"]["objective"] == _valid_contract(project)["objective"]
     assert plane.mission.load_active_pointer()["mission_id"] == r["mission_id"]
+
+
+def test_open_mission_review_required_missing_project_path(plane: ControlPlane, project: Path) -> None:
+    r = plane.open_mission(
+        objective="Do something",
+        artifact="tests/file.py",
+        done_criteria=[{"id": "dc-1", "description": "x"}],
+        non_goals=[],
+        constraints=None,
+        owner="samuel",
+    )
+    assert r["ok"] is False
+    assert r["error"] == "review_required"
+    assert r["status"] == "review_required"
+    assert "project_path is required" in r["issues"]
+    assert plane.mission.load_active_pointer()["mission_id"] is None
+
+
+def test_open_mission_review_required_blank_project_path(plane: ControlPlane, project: Path) -> None:
+    for blank in ("", "   ", "\t"):
+        r = plane.open_mission(
+            objective="Do something",
+            artifact="tests/file.py",
+            done_criteria=[{"id": "dc-1", "description": "x"}],
+            non_goals=[],
+            constraints={"project_path": blank},
+            owner="samuel",
+        )
+        assert r["ok"] is False
+        assert r["error"] == "review_required"
+        assert r["status"] == "review_required"
+        assert "project_path is required" in r["issues"]
+        assert plane.mission.load_active_pointer()["mission_id"] is None
 
 
 def test_open_mission_review_required_missing_artifact(plane: ControlPlane, project: Path) -> None:
@@ -937,18 +971,56 @@ def test_lease_expiry_audited(plane: ControlPlane, project: Path) -> None:
     assert payload["event_type"] == "lease_expired"
 
 
-def _open_without_project(plane: ControlPlane) -> dict:
-    return plane.open_mission(
-        objective="Harden without a bound project root",
-        artifact="notes.md",
-        done_criteria=[
+def _seed_legacy_mission_without_project(plane: ControlPlane) -> dict:
+    """Seed a pre-gate legacy contract with no project_path (open no longer allows this)."""
+    mission_id = _new_id("M")
+    version = 1
+    contract_body = {
+        "mission_id": mission_id,
+        "contract_version": version,
+        "status": "active",
+        "created_at": _utc_now(),
+        "objective": "Harden without a bound project root",
+        "artifact": "notes.md",
+        "done_criteria": [
             {"id": "dc-1", "description": "first"},
             {"id": "dc-2", "description": "second"},
         ],
-        non_goals=[],
-        constraints={},  # deliberately no project_path
-        owner="samuel",
+        "non_goals": [],
+        "constraints": {
+            "owner": "samuel",
+            "project_id": None,
+            "project_path": None,
+            "allowed_paths": [],
+            "capabilities": ["read", "write", "test"],
+            "max_parallel_sessions": 1,
+            "time_limit_hours": None,
+        },
+    }
+    contract_body["contract_hash"] = contract_hash(contract_body)
+    mdir = plane.mission.mission_dir(mission_id)
+    (mdir / "contracts").mkdir(parents=True, exist_ok=True)
+    plane.mission.sessions_dir(mission_id).mkdir(parents=True, exist_ok=True)
+    write_json(plane.mission.contract_path(mission_id, version), contract_body)
+    write_json(
+        mdir / "mission.json",
+        {
+            "mission_id": mission_id,
+            "status": "active",
+            "current_version": version,
+            "created_at": contract_body["created_at"],
+            "owner": "samuel",
+        },
     )
+    plane.mission.save_active_pointer(mission_id, "active")
+    return {
+        "ok": True,
+        "mission_id": mission_id,
+        "contract_version": version,
+        "contract": contract_body,
+        "contract_hash": contract_body["contract_hash"],
+        "status": "active",
+    }
 
 
 @pytest.mark.parametrize("expected_prefix", ["M", "S", "I"])
@@ -1035,7 +1107,7 @@ def test_open_mission_rejects_unsafe_allowed_paths(plane: ControlPlane, project:
 
 
 def test_check_activity_rejects_path_when_no_project_root(plane: ControlPlane) -> None:
-    opened = _open_without_project(plane)
+    opened = _seed_legacy_mission_without_project(plane)
     auth = plane.authorize_session(
         mission_id=opened["mission_id"],
         contract_version=opened["contract_version"],
@@ -1080,7 +1152,7 @@ def test_check_activity_null_byte_path_is_structured_not_raised(plane: ControlPl
 
 
 def test_close_mission_rejects_evidence_without_project_root(plane: ControlPlane, tmp_path: Path) -> None:
-    opened = _open_without_project(plane)
+    opened = _seed_legacy_mission_without_project(plane)
     real_file = tmp_path / "pyproject.toml"
     real_file.write_text("[tool]\n", encoding="utf-8")
     r = plane.close_mission(
