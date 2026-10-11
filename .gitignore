@@ -12,3 +12,4 @@ dist/
 evals/hai_mcp_impact_v1/runs/
 evals/hai_mcp_impact_v1/fixtures/manifest.json
 evals/stdio_smoke/smoke-*.json
+evals/stdio_smoke/latest.json
