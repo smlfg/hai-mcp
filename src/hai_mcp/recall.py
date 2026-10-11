@@ -316,7 +316,9 @@ def context_terms(cfg: Config) -> set[str]:
     data = read_json(cfg.hai_home / "ACTIVE_CONTEXT.json", {})
     if not isinstance(data, dict):
         return set()
-    focus = str(data.get("focus_id", ""))
+    # A present JSON null is not the default "", and str(None) would rank the word "none".
+    focus_raw = data.get("focus_id", "")
+    focus = focus_raw if isinstance(focus_raw, str) else ""
     blob = [focus]
     for entry in data.get("active", []) or []:
         if not isinstance(entry, dict):
