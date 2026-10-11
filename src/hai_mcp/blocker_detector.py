@@ -47,6 +47,9 @@ _GIT_TIMEOUT_SECONDS = 15
 #: Two distinct blocked artifacts make a capability due. One is noise; two is a pattern.
 DUE_THRESHOLD = 2
 
+#: Porcelain XY codes for an unmerged path. _probe_unmerged already reports these.
+_UNMERGED_PORCELAIN = frozenset({"AA", "AU", "DD", "DU", "UA", "UD", "UU"})
+
 #: Markers git leaves in the git dir while an operation is half-finished.
 _IN_PROGRESS_MARKERS: tuple[tuple[str, str], ...] = (
     ("CHERRY_PICK_HEAD", "cherry-pick"),
@@ -323,7 +326,7 @@ def _probe_dirty(repo: Path, label: str) -> list[Finding]:
     for line in raw.splitlines():
         if len(line) < 4:
             continue
-        if line[:2] == "UU":  # already reported as a conflict
+        if line[:2] in _UNMERGED_PORCELAIN:  # already reported as a conflict
             continue
         changed.append(line[3:].strip().strip('"'))
     if not changed:
@@ -341,7 +344,9 @@ def _probe_dirty(repo: Path, label: str) -> list[Finding]:
 
 
 def _probe_stashes(repo: Path, label: str) -> list[Finding]:
-    ok, raw = _git_ok(repo, ["for-each-ref", "--format=%(committerdate:unix)", "refs/stash"])
+    # refs/stash is one ref. Older entries exist only in its reflog, which
+    # `stash list` reads via `log --walk-reflogs`.
+    ok, raw = _git_ok(repo, ["log", "--walk-reflogs", "--format=%ct", "refs/stash"])
     if not ok:
         return []
     stamps = [line.strip() for line in raw.splitlines() if line.strip()]
@@ -378,7 +383,9 @@ def scan_repo(repo_path: str | Path) -> tuple[list[Finding], dict[str, Any] | No
 
     root = Path(top)
     git_dir = Path(git_dir_raw)
-    label = root.name or str(root)
+    # Toplevel path, not the directory name: two checkouts can share a basename,
+    # and that string is the artifact identity verdicts count.
+    label = str(root)
 
     findings: list[Finding] = []
     try:

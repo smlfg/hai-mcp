@@ -160,6 +160,28 @@ def test_context_terms_are_empty_without_active_context(cfg: Config) -> None:
     assert context_terms(cfg) == set()
 
 
+def test_null_focus_is_not_a_ranking_term(cfg: Config) -> None:
+    """The default ACTIVE_CONTEXT stores focus_id as JSON null, not ""."""
+    (cfg.hai_home / "ACTIVE_CONTEXT.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "focus_id": None,
+                "active": [
+                    {"id": "brueggen-v1", "label": "Brueggen Fragebogen", "project_path": "/x/BRUEGGEN"}
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    terms = context_terms(cfg)
+    assert "none" not in terms
+    assert "brueggen" in terms
+    parked(cfg, P1, "alt und ohne bezug", days_ago=90)
+    parked(cfg, "P-20260828T212924-8728a80e", "none of this is relevant", days_ago=1)
+    assert collect(cfg)[0].item_id == P1
+
+
 # --- closing never edits the item -------------------------------------------
 
 

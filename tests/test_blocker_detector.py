@@ -7,6 +7,7 @@ against a mock would repeat the mistake this project already made twice.
 
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 
@@ -158,6 +159,30 @@ def test_stash_backlog(repo: Path) -> None:
     assert "stash_backlog" in kinds(findings)
 
 
+def test_stash_backlog_counts_the_reflog_not_only_the_tip(repo: Path) -> None:
+    def stash_at(text: str, when: str) -> None:
+        write(repo, "README.md", text)
+        env = os.environ.copy()
+        env["GIT_AUTHOR_DATE"] = when
+        env["GIT_COMMITTER_DATE"] = when
+        subprocess.run(
+            ["git", *GIT_IDENTITY, "-C", str(repo), "stash", "push", "-m", when],
+            check=True,
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+
+    stash_at("alt\n", "2020-01-01T00:00:00Z")
+    stash_at("neu\n", "2026-10-01T00:00:00Z")
+    findings, error = scan_repo(repo)
+    assert error is None
+    finding = next(f for f in findings if f.kind == "stash_backlog")
+    assert finding.evidence.startswith("2 ")
+    assert finding.age_days is not None
+    assert finding.age_days > 365
+
+
 def test_stuck_cherry_pick_and_conflicts(repo: Path) -> None:
     """The exact situation sitting on the owner's MacBook."""
     git_strict(repo, "switch", "-c", "side")
@@ -204,6 +229,54 @@ def test_two_blocked_artifacts_make_the_capability_due(repo: Path) -> None:
     assert remote.blocked_artifacts >= DUE_THRESHOLD
     assert remote.status == "due"
     assert remote.practice.startswith("tracks/04-tooling")
+
+
+def test_same_directory_name_keeps_distinct_artifacts(tmp_path: Path) -> None:
+    roots: list[Path] = []
+    for parent in ("a", "b"):
+        work = tmp_path / parent / "hai-mcp"
+        work.mkdir(parents=True)
+        git_strict(work, "init", "--initial-branch=main")
+        write(work, "README.md", "start\n")
+        commit_all(work, "start")
+        write(work, "README.md", f"dirty {parent}\n")
+        roots.append(work)
+
+    findings = []
+    for work in roots:
+        found, error = scan_repo(work)
+        assert error is None
+        findings += found
+    dirty = [f for f in findings if f.kind == "dirty_worktree"]
+    assert len({f.artifact_id for f in dirty}) == 2
+    assert {Path(f.repo) for f in dirty} == set(roots)
+    basics = next(c for c in verdicts(findings) if c.capability == "git-basics")
+    assert basics.blocked_artifacts == 2
+    assert basics.status == "due"
+
+
+def test_both_added_conflict_is_not_also_dirty_work(repo: Path) -> None:
+    git_strict(repo, "switch", "-c", "add-a")
+    write(repo, "both.txt", "from a\n")
+    commit_all(repo, "add both from a")
+    git_strict(repo, "switch", "main")
+    git_strict(repo, "switch", "-c", "add-b")
+    write(repo, "both.txt", "from b\n")
+    commit_all(repo, "add both from b")
+    git_strict(repo, "switch", "add-a")
+    git(repo, "merge", "--no-commit", "--no-ff", "add-b")
+
+    findings, error = scan_repo(repo)
+    assert error is None
+    assert "unmerged_paths" in kinds(findings)
+    assert "dirty_worktree" not in kinds(findings)
+
+    write(repo, "extra.txt", "wirklich schmutzig\n")
+    findings, error = scan_repo(repo)
+    assert error is None
+    dirty = next(f for f in findings if f.kind == "dirty_worktree")
+    assert "extra.txt" in dirty.evidence
+    assert "both.txt" not in dirty.evidence
 
 
 def test_two_findings_on_one_branch_count_as_one_artifact(repo: Path) -> None:
