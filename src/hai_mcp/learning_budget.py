@@ -151,8 +151,15 @@ class LearningBudget:
         minimum_epoch = self._parse_utc(
             started["minimum_completion_at"], "learning block minimum completion time"
         )
-        minimum_seconds = int(LEARNING_POLICY["minimum_learning_minutes"]) * 60
-        if minimum_epoch - started_epoch < minimum_seconds:
+        # The start record fixes the duration. Comparing that span to the live policy
+        # constant invalidates every open and historical block when the owner raises
+        # the minimum, and writer admission then fails closed. Tamper detection stays:
+        # the declared duration must be a non-negative int, and the timestamps must
+        # cover at least that long.
+        stored_minutes = started.get("minimum_learning_minutes")
+        if type(stored_minutes) is not int or stored_minutes < 0:
+            raise LearningStateError("learning block minimum duration is invalid")
+        if minimum_epoch - started_epoch < stored_minutes * 60:
             raise LearningStateError("learning block minimum duration is invalid")
 
         completed = self._read_optional_record(block_dir / "completed.json")
@@ -185,8 +192,11 @@ class LearningBudget:
                     raise LearningStateError("completed learning block evidence digest is invalid")
                 if type(item.get("bytes")) is not int or item["bytes"] < 1:
                     raise LearningStateError("completed learning block evidence size is invalid")
+            # The completed record is the source of truth for credits minted, same as
+            # the activation balance in snapshot(). Comparing it to the live policy
+            # constant bricks the ledger on a retune. Tamper detection stays: non-negative int.
             delta = completed.get("credit_delta")
-            if type(delta) is not int or delta != LEARNING_POLICY["writer_credits_per_learning_block"]:
+            if type(delta) is not int or delta < 0:
                 raise LearningStateError("completed learning block credit delta is invalid")
         if abandoned is not None:
             if abandoned.get("record_type") != "learning_block_abandoned":
@@ -201,12 +211,41 @@ class LearningBudget:
                 raise LearningStateError("abandoned learning block must not mint credits")
         return started, completed, abandoned
 
+    @staticmethod
+    def _discard_uncommitted_block(block_dir: Path) -> None:
+        started = block_dir / "started.json"
+        if started.exists() or started.is_symlink():
+            return
+        try:
+            block_dir.rmdir()
+        except OSError:
+            pass
+
+    @staticmethod
+    def _is_uncommitted_block(block_dir: Path) -> bool:
+        """A start that died after mkdir, before any record existed, is not a ledger entry.
+
+        Treating that directory as a destroyed ledger locks every later read, including
+        worker capacity, until someone removes it by hand.
+        """
+        if block_dir.is_symlink() or not block_dir.is_dir():
+            return False
+        if not LEARNING_BLOCK_ID.fullmatch(block_dir.name):
+            return False
+        for name in ("started.json", "completed.json", "abandoned.json"):
+            path = block_dir / name
+            if path.exists() or path.is_symlink():
+                return False
+        return True
+
     def _blocks(
         self,
     ) -> list[tuple[dict[str, Any], dict[str, Any] | None, dict[str, Any] | None]]:
         blocks_dir = assert_under(self.blocks_dir, self.cfg.hai_home)
         records = []
         for block_dir in sorted(blocks_dir.iterdir()):
+            if self._is_uncommitted_block(block_dir):
+                continue
             records.append(self._read_block(block_dir))
         return records
 
@@ -303,7 +342,11 @@ class LearningBudget:
             }
             block_dir = assert_under(self.blocks_dir / block_id, self.cfg.hai_home)
             block_dir.mkdir(parents=False, exist_ok=False)
-            write_json(block_dir / "started.json", record)
+            try:
+                write_json(block_dir / "started.json", record)
+            except OSError:
+                self._discard_uncommitted_block(block_dir)
+                raise
             return {
                 "ok": True,
                 "status": "active",

@@ -117,6 +117,90 @@ def test_complete_enforces_server_time_and_mints_credits(tmp_path: Path) -> None
     assert budget.snapshot().completed_blocks == 1
 
 
+def test_policy_retune_does_not_invalidate_existing_blocks(tmp_path: Path) -> None:
+    now = [1_800_000_000.0]
+    budget, study = _budget(tmp_path, now=now)
+    evidence = study / "exceptions.md"
+    evidence.write_text("My exception experiments and explanation.\n", encoding="utf-8")
+    started = budget.start("Python exceptions", str(evidence))
+    reflection = {
+        "block_id": started["block_id"],
+        "own_activity": "I wrote and ran examples with try/except/finally.",
+        "learned": "A finally block runs even when an exception propagates.",
+        "open_question": "When should custom exceptions carry structured fields?",
+        "evidence_paths": [str(evidence)],
+        "owner_ack": True,
+    }
+    now[0] += 25 * 60
+    completed = budget.complete(**reflection)
+    assert completed["ok"] is True
+
+    modules = study / "modules.md"
+    modules.write_text("Module notes.\n", encoding="utf-8")
+    open_block = budget.start("Python modules", str(modules))
+    assert open_block["ok"] is True
+
+    original_minutes = LEARNING_POLICY["minimum_learning_minutes"]
+    original_credits = LEARNING_POLICY["writer_credits_per_learning_block"]
+    LEARNING_POLICY["minimum_learning_minutes"] = 40
+    LEARNING_POLICY["writer_credits_per_learning_block"] = 5
+    try:
+        snapshot = budget.snapshot()
+        assert snapshot.completed_blocks == 1
+        assert snapshot.writer_credits_earned == original_credits
+        assert budget.worker_capacity().degraded_reason is None
+
+        now[0] += original_minutes * 60
+        finished = budget.complete(
+            block_id=open_block["block_id"],
+            own_activity="I imported a module and ran it.",
+            learned="A module is a file Python can import.",
+            open_question="When does a package need __init__.py?",
+            evidence_paths=[str(modules)],
+            owner_ack=True,
+        )
+        assert finished["ok"] is True
+        assert finished["credits_minted"] == 5
+        assert budget.snapshot().writer_credits_earned == original_credits + 5
+
+        replacement = budget.start("Python packaging", str(study / "packaging.md"))
+        assert replacement["ok"] is True
+        abandoned = budget.abandon(replacement["block_id"], "enough for today", owner_ack=True)
+        assert abandoned["ok"] is True
+        assert budget.worker_capacity().degraded_reason is None
+    finally:
+        LEARNING_POLICY["minimum_learning_minutes"] = original_minutes
+        LEARNING_POLICY["writer_credits_per_learning_block"] = original_credits
+
+
+def test_failed_start_does_not_poison_the_ledger(tmp_path: Path, monkeypatch) -> None:
+    budget, study = _budget(tmp_path)
+
+    def fail_write(path: Path, data: object) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr("hai_mcp.learning_budget.write_json", fail_write)
+    failed = budget.start("Python exceptions", str(study / "exceptions.md"))
+    assert failed["ok"] is False
+    assert failed["error"] == "invalid_args"
+    assert list(budget.blocks_dir.iterdir()) == []
+
+    leftover = budget.blocks_dir / "LB-20260809T095643-7751613b"
+    leftover.mkdir()
+    (leftover / ".started.json.1234.tmp").write_text("partial", encoding="utf-8")
+
+    monkeypatch.undo()
+    capacity = budget.worker_capacity()
+    assert capacity.degraded_reason is None
+    assert capacity.capacity == FLOOR
+    assert budget.snapshot().completed_blocks == 0
+
+    started = budget.start("Python exceptions", str(study / "exceptions.md"))
+    assert started["ok"] is True
+    abandoned = budget.abandon(started["block_id"], "cleanup check", owner_ack=True)
+    assert abandoned["ok"] is True
+
+
 def test_abandon_requires_owner_ack_and_mints_nothing(tmp_path: Path) -> None:
     now = [1_800_000_000.0]
     budget, study = _budget(tmp_path, now=now)
