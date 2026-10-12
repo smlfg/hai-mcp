@@ -1,0 +1,76 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.smlfg/hai-mcp",
+  "title": "HAI-MCP",
+  "description": "Model-agnostic MCP control-plane for the Human Agent Interface (HAI) approach: bounded missions, owner-gated actions, and activity drift checks.",
+  "version": "0.1.0",
+  "repository": {
+    "url": "https://github.com/smlfg/hai-mcp",
+    "source": "github"
+  },
+  "packages": [
+    {
+      "registryType": "pypi",
+      "registryBaseUrl": "https://pypi.org",
+      "identifier": "hai-mcp",
+      "version": "0.1.0",
+      "runtimeHint": "uvx",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "HAI_HOME",
+          "description": "Directory for the global HAI state (missions, leases, proofs). Default: ~/.hai",
+          "isRequired": false,
+          "isSecret": false
+        },
+        {
+          "name": "HAI_OWNER_HOME",
+          "description": "Directory for the owner out-of-band channel (one-time nonces). Deliberately outside HAI_HOME. Default: ~/.hai-owner",
+          "isRequired": false,
+          "isSecret": false
+        },
+        {
+          "name": "HAI_TRANSPORT",
+          "description": "Transport selection: 'stdio' (default) or 'streamable-http'.",
+          "default": "stdio",
+          "isRequired": false,
+          "isSecret": false
+        },
+        {
+          "name": "HAI_HTTP_HOST",
+          "description": "Host for streamable-http transport. Refused unless loopback or HAI_HTTP_TOKEN is set.",
+          "default": "127.0.0.1",
+          "isRequired": false,
+          "isSecret": false
+        },
+        {
+          "name": "HAI_HTTP_PORT",
+          "description": "Port for streamable-http transport.",
+          "default": "8765",
+          "isRequired": false,
+          "isSecret": false
+        },
+        {
+          "name": "HAI_HTTP_TOKEN",
+          "description": "Bearer token required to accept non-loopback streamable-http connections. Loopback binds without a token.",
+          "isRequired": false,
+          "isSecret": true
+        }
+      ]
+    }
+  ],
+  "_meta": {
+    "io.modelcontextprotocol.registry/publisher-provided": {
+      "tool": "hai-mcp marketplace-prep",
+      "version": "0.1.0",
+      "build_info": {
+        "source_repo": "https://github.com/smlfg/hai-mcp",
+        "head_commit": "77c4e76e0344b3ea612e55028c4d923bf75f27d8",
+        "license": "MIT",
+        "owner_canonical_site": "https://www.human-agent-interface.com/"
+      }
+    }
+  }
+}

@@ -2,6 +2,7 @@
 README for hai-mcp — polished for the public GitHub repo (smlfg/hai-mcp).
 Banner + architecture overview (MCP control-plane explained) + features +
 sample integration snippets + limitations + license.
+mcp-name: io.github.smlfg/hai-mcp
 -->
 
 <p align="center">

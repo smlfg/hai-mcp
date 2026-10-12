@@ -1,0 +1,58 @@
+# smithery.yaml — HAI-MCP Smithery publishing hint
+#
+# Stand 2026-10-12: Smithery unterstützt zwei offizielle Wege zum Veröffentlichen
+# (siehe https://smithery.ai/docs/build/publish):
+#
+#   1. "URL" — eigene HTTPS-URL, die einen Streamable-HTTP-MCP-Server ausliefert.
+#   2. "Local (MCPB Bundle)" — vorbereitetes .mcpb-Bundle, das Smithery an
+#      Endnutzer als lokales stdio-Server-Paket verteilt.
+#
+# HAI-MCP ist primär ein **lokales** stdio-Steuerungswerkzeug mit optionalem
+# loopback-Streamable-HTTP, das explizit keine offene Hosting-URL vorsieht
+# (Owner-Auth via Datei/ntfy, gehärtet). Daher ist der saubere Smithery-Weg
+# **MCPB-Bundle** (siehe `docs/MCPB.md` sobald vorhanden; aktuell in einer
+# separaten Slice zu erstellen).
+#
+# Diese Datei bleibt als historischer Marker erhalten, weil ältere Smithery-
+# Workflows (Stand 2024) noch nach `smithery.yaml` Ausschau hielten. Der
+# aktuelle Smithery-Publisher-CLI ignoriert sie.
+#
+# Sobald das MCPB-Bundle bereitsteht, lautet der Publish-Befehl:
+#   smithery mcp publish ./hai-mcp.mcpb -n smlfg/hai-mcp
+#
+# Bis dahin ist HAI-MCP auf Smithery nicht eingereicht.
+
+runtime: python
+entrypoint: hai_mcp.server:main
+transport: stdio
+language: python
+python_version: ">=3.12"
+
+# Standardinstallationskommandos für MCP-Clients. Werden ggf. von Legacy-
+# Scannern gelesen.
+install:
+  - "git clone https://github.com/smlfg/hai-mcp.git"
+  - "cd hai-mcp && uv sync --all-extras"
+  - "uv run hai-mcp"
+
+# Optionale Streamable-HTTP-Konfiguration für den Fall, dass eine selbst
+# gehostete Instanz via Smithery-URL-Weg verfügbar gemacht werden soll.
+http:
+  host: "127.0.0.1"
+  port: 8765
+  path: "/mcp"
+  auth: "bearer-or-loopback"
+  env:
+    HAI_TRANSPORT: "streamable-http"
+    HAI_HTTP_HOST: "127.0.0.1"
+    HAI_HTTP_PORT: "8765"
+    HAI_HTTP_TOKEN: "${HAI_HTTP_TOKEN}"
+
+# Werkzeug-Beschreibung (eingeschränkt, in voller Länge im README).
+description: |
+  HAI-MCP is the model-agnostic MCP control-plane for the Human Agent
+  Interface (HAI) approach. It exposes 23 governance tools (mission
+  contracts, session leases, activity drift checks, owner-gated accept /
+  recontract / abandon, checkpoints, recovery) so any MCP-speaking agent
+  stays bounded, observable, and recoverable while the human owner keeps
+  the thread. Local-first, MIT-licensed.
