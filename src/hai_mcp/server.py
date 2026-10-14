@@ -129,17 +129,20 @@ def hai_open_mission(
     artifact: str,
     done_criteria: list[dict[str, Any]],
     owner: str,
+    project_path: str,
     non_goals: list[str] | None = None,
     constraints: dict[str, Any] | None = None,
 ) -> str:
     """Open a bounded mission with a versioned canonical contract. One active mission globally."""
+    merged = dict(constraints or {})
+    merged["project_path"] = project_path
     return _json(
         get_control_plane().open_mission(
             objective=objective,
             artifact=artifact,
             done_criteria=done_criteria,
             non_goals=non_goals,
-            constraints=constraints,
+            constraints=merged,
             owner=owner,
         )
     )
@@ -342,12 +345,14 @@ def hai_mission_start(
     artifact: str,
     done_criteria: list[dict[str, Any]],
     owner: str,
+    project_path: str,
     time_limit_hours: StrictNumber = None,
     non_goals: list[str] | None = None,
     constraints: dict[str, Any] | None = None,
 ) -> str:
     """Fast start: declare problem + artifact + time limit. Thin wrapper over hai_open_mission (one canonical contract)."""
     merged = dict(constraints or {})
+    merged["project_path"] = project_path
     if time_limit_hours is not None:
         tl, err = strict_optional_time_limit_hours(time_limit_hours)
         if err:

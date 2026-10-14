@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -8,6 +10,23 @@ DEFAULT_ARTIFACT_DIR = "Projek-Managment"
 MAX_ACTIVE_LANES = 2
 SERVER_NAME = "hai-mcp"
 SERVER_VERSION = "0.1.0"
+
+# Writer capacity is derived from completed Learning Blocks (see learning_budget.py). The
+# floor is the point: coding agentically erodes the owner's own skill, so throughput is
+# deliberately coupled to deliberate learning — but a coupling that can reach zero locks the
+# owner out of their own system (2026-08-09, fails/0004). Without learning it gets narrower,
+# never shut.
+LEARNING_POLICY = {
+    "initial_writer_credits": 2,
+    "writer_credits_per_learning_block": 2,
+    "minimum_learning_minutes": 25,
+    "banking_enabled": True,
+    "writer_capability": "write",
+    "evidence_root": "02_STUDIUM",
+    "worker_capacity_floor": 2,
+    "worker_capacity_cap": 6,
+    "worker_slots_per_learning_block": 1,
+}
 
 # Owner gate: the owner is a separate principal from the agent (see owner_gate.py).
 DEFAULT_OWNER_GATE = "nonce"  # "nonce" (one-time code via owner channel) | "ack_legacy" (honor system)
@@ -22,6 +41,8 @@ class Config:
     hai_home: Path
     artifact_dir_name: str = DEFAULT_ARTIFACT_DIR
     max_active_lanes: int = MAX_ACTIVE_LANES
+    learning_evidence_root: Path | None = None
+    clock: Callable[[], float] = field(default=time.time, repr=False, compare=False)
     owner_gate: str = DEFAULT_OWNER_GATE
     owner_channel: str = DEFAULT_OWNER_CHANNEL
     owner_home: Path | None = None  # None → ~/.hai-owner (must NOT be inside hai_home)
@@ -78,6 +99,14 @@ class Config:
 
     def resolved_owner_home(self) -> Path:
         return (self.owner_home or (Path.home() / ".hai-owner")).expanduser().resolve()
+
+    @property
+    def resolved_learning_evidence_root(self) -> Path:
+        configured = self.learning_evidence_root
+        if configured is None:
+            raw = os.environ.get("HAI_LEARNING_EVIDENCE_ROOT", "").strip()
+            configured = Path(raw).expanduser() if raw else Path.home() / "Projects" / "02_STUDIUM"
+        return configured.expanduser().resolve()
 
 
 def ensure_hai_home(cfg: Config) -> Path:
