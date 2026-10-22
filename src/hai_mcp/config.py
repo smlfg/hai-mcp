@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -11,9 +12,11 @@ SERVER_VERSION = "0.1.0"
 
 # Owner gate: the owner is a separate principal from the agent (see owner_gate.py).
 DEFAULT_OWNER_GATE = "nonce"  # "nonce" (one-time code via owner channel) | "ack_legacy" (honor system)
-DEFAULT_OWNER_CHANNEL = "file"  # "file" (HAI_OWNER_HOME) | "ntfy" (push notification)
+DEFAULT_OWNER_CHANNEL = "file"  # "file" (HAI_OWNER_HOME) | "ntfy" (push) | "touchid" (macOS biometric)
+OWNER_CHANNELS = frozenset({"file", "ntfy", "touchid"})
 DEFAULT_OWNER_NTFY_URL = "https://ntfy.sh"
 DEFAULT_OWNER_CODE_TTL_SECONDS = 600
+DEFAULT_OWNER_TOUCHID_TIMEOUT_SECONDS = 60
 _OWNER_GATE_ALIASES = {"nonce": "nonce", "ack": "ack_legacy", "ack_legacy": "ack_legacy"}
 
 
@@ -29,6 +32,10 @@ class Config:
     owner_ntfy_topic: str | None = None
     owner_ntfy_token: str | None = None
     owner_code_ttl_seconds: int = DEFAULT_OWNER_CODE_TTL_SECONDS
+    # Touch ID: how long the native prompt waits, optional file fallback, optional helper path.
+    owner_touchid_timeout_seconds: int = DEFAULT_OWNER_TOUCHID_TIMEOUT_SECONDS
+    owner_touchid_fallback: str | None = None  # only "file", and only when explicitly configured
+    owner_touchid_helper: Path | None = None  # None → packaged touchid_prompt.swift
     warnings: tuple[str, ...] = field(default_factory=tuple)
 
     @classmethod
@@ -45,9 +52,13 @@ class Config:
             gate = DEFAULT_OWNER_GATE
 
         channel = os.environ.get("HAI_OWNER_CHANNEL", DEFAULT_OWNER_CHANNEL).strip().lower() or DEFAULT_OWNER_CHANNEL
-        if channel not in {"file", "ntfy"}:
+        if channel not in OWNER_CHANNELS:
             warnings.append(f"HAI_OWNER_CHANNEL={channel!r} unknown; using 'file'")
             channel = DEFAULT_OWNER_CHANNEL
+        elif channel == "touchid" and sys.platform != "darwin":
+            warnings.append(
+                "HAI_OWNER_CHANNEL=touchid is only available on macOS; owner-gated actions will fail closed"
+            )
 
         owner_home_raw = os.environ.get("HAI_OWNER_HOME", "").strip()
         owner_home = Path(owner_home_raw).expanduser().resolve() if owner_home_raw else None
@@ -64,6 +75,40 @@ class Config:
                     warnings.append(f"HAI_OWNER_CODE_TTL={ttl} too small; using 30")
                     ttl = 30
 
+        touch_timeout = DEFAULT_OWNER_TOUCHID_TIMEOUT_SECONDS
+        touch_raw = os.environ.get("HAI_OWNER_TOUCHID_TIMEOUT", "").strip()
+        if touch_raw:
+            try:
+                touch_timeout = int(touch_raw)
+            except ValueError:
+                warnings.append(
+                    f"HAI_OWNER_TOUCHID_TIMEOUT={touch_raw!r} is not an integer; using {touch_timeout}"
+                )
+                touch_timeout = DEFAULT_OWNER_TOUCHID_TIMEOUT_SECONDS
+            else:
+                if touch_timeout < 5:
+                    warnings.append(f"HAI_OWNER_TOUCHID_TIMEOUT={touch_timeout} too small; using 5")
+                    touch_timeout = 5
+                elif touch_timeout > 180:
+                    warnings.append(f"HAI_OWNER_TOUCHID_TIMEOUT={touch_timeout} too large; using 180")
+                    touch_timeout = 180
+
+        fallback_raw = os.environ.get("HAI_OWNER_TOUCHID_FALLBACK", "").strip().lower()
+        touch_fallback: str | None = None
+        if fallback_raw:
+            if fallback_raw == "file" and channel == "touchid":
+                touch_fallback = "file"
+            elif fallback_raw == "file":
+                warnings.append("HAI_OWNER_TOUCHID_FALLBACK=file applies only when HAI_OWNER_CHANNEL=touchid; ignoring")
+            else:
+                warnings.append(
+                    f"HAI_OWNER_TOUCHID_FALLBACK={fallback_raw!r} is not supported; only 'file' is allowed. "
+                    "Touch ID will fail closed when the prompt cannot run."
+                )
+
+        helper_raw = os.environ.get("HAI_OWNER_TOUCHID_HELPER", "").strip()
+        touch_helper = Path(helper_raw).expanduser().resolve() if helper_raw else None
+
         return cls(
             hai_home=home,
             owner_gate=gate,
@@ -73,6 +118,9 @@ class Config:
             owner_ntfy_topic=os.environ.get("HAI_OWNER_NTFY_TOPIC", "").strip() or None,
             owner_ntfy_token=os.environ.get("HAI_OWNER_NTFY_TOKEN", "").strip() or None,
             owner_code_ttl_seconds=ttl,
+            owner_touchid_timeout_seconds=touch_timeout,
+            owner_touchid_fallback=touch_fallback,
+            owner_touchid_helper=touch_helper,
             warnings=tuple(warnings),
         )
 

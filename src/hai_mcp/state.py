@@ -371,7 +371,10 @@ class ControlPlane:
                 return gate_result
             gate_info = gate_result
             if not reason_text:
-                reason_text = f"owner code accepted ({gate_info['challenge_id']})"
+                if gate_info.get("channel") == "touchid":
+                    reason_text = f"owner approved with Touch ID ({gate_info['challenge_id']})"
+                else:
+                    reason_text = f"owner code accepted ({gate_info['challenge_id']})"
 
         canonical = ad / "NEXT_STEP.md"
         history_dir = ad / "history"

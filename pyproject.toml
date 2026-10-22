@@ -23,6 +23,9 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/hai_mcp"]
 
+[tool.hatch.build.targets.wheel.force-include]
+"src/hai_mcp/touchid_prompt.swift" = "hai_mcp/touchid_prompt.swift"
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 # "." makes the repo root importable so tests can reach scripts/ (test_stdio_smoke
