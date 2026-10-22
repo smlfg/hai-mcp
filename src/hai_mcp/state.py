@@ -310,6 +310,7 @@ class ControlPlane:
         reason: str | None = None,
         content: str | None = None,
         owner_code: Any = None,
+        approval_context: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         reason_text = str(reason or "").strip()
 
@@ -366,6 +367,7 @@ class ControlPlane:
                 summary=f"Accept NEXT_STEP for {project.name}",
                 preview={"project_path": str(project), "next_step": body.strip()[:600]},
                 owner_code=owner_code,
+                approval_context=approval_context,
             )
             if not passed:
                 return gate_result
@@ -569,6 +571,7 @@ class ControlPlane:
         owner_ack: Any = False,
         break_glass_marker: Any = False,
         owner_code: Any = None,
+        approval_context: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         return self.mission.recontract(
             mission_id=mission_id,
@@ -579,6 +582,7 @@ class ControlPlane:
             owner_ack=owner_ack,
             break_glass_marker=break_glass_marker,
             owner_code=owner_code,
+            approval_context=approval_context,
         )
 
     def close_mission(
@@ -591,6 +595,7 @@ class ControlPlane:
         owner_ack: Any = False,
         device_id: str | None = None,
         owner_code: Any = None,
+        approval_context: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         return self.mission.close_mission(
             mission_id=mission_id,
@@ -601,6 +606,7 @@ class ControlPlane:
             owner_ack=owner_ack,
             device_id=device_id,
             owner_code=owner_code,
+            approval_context=approval_context,
         )
 
     # --- Additional daily-loop flow surface (thin, over the hardened engine) ---

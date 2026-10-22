@@ -90,3 +90,15 @@ Optional `streamable-http` transport is trusted-localhost or bearer-token gated 
 
 - `hai_authorize_session`: optional `device_id`, `harness_id` (required `device_id` when contract has `project_id`)
 - `hai_close_mission` / `hai_proof`: optional `device_id` (required when contract has `project_id`)
+
+
+## Human-readable owner approval context
+
+`hai_accept_next_step`, `hai_recontract` and `hai_close_mission` accept optional
+`approval_context: {agent?: string, session?: string, topic?: string}`. Supply the
+agent name, human session/chat title and approval topic; repeat the same context
+on the follow-up. These labels are untrusted display context, not identity proof.
+Agent defaults to MCP `clientInfo.title`/`name`; absent session/topic are honestly
+shown as not named. Touch ID shows German action and a bounded change excerpt,
+never generated IDs or hash prefixes. Full normalized labels are fingerprint-bound.
+See `docs/OWNER_GATE.md` for display bounds and missing/opaque-label behavior.

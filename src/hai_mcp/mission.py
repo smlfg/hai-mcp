@@ -1219,6 +1219,7 @@ class MissionEngine:
         owner_ack: Any = False,
         break_glass_marker: Any = False,
         owner_code: Any = None,
+        approval_context: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         err = self._reject_mission_id(mission_id)
         if err:
@@ -1282,10 +1283,11 @@ class MissionEngine:
         else:
             passed, gate_result = self.owner_gate.require(
                 action="recontract",
-                subject={"mission_id": mission_id, "contract_version": version, "mode": mode, "diff": diff},
+                subject={"mission_id": mission_id, "contract_version": version, "mode": mode, "diff": diff, "reason": reason},
                 summary=f"Recontract mission {mission_id} v{version} -> v{version + 1} ({mode})",
                 preview={"mission_id": mission_id, "mode": mode, "reason": reason, "diff": diff},
                 owner_code=owner_code,
+                approval_context=approval_context,
             )
             if not passed:
                 gate_result["diff"] = diff
@@ -1429,6 +1431,7 @@ class MissionEngine:
         owner_ack: Any = False,
         device_id: str | None = None,
         owner_code: Any = None,
+        approval_context: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         err = self._reject_mission_id(mission_id)
         if err:
@@ -1493,7 +1496,7 @@ class MissionEngine:
                     return {"ok": False, "error": "invalid_args", "message": "abandon reason required in outcome_summary"}
                 passed, gate_result = self.owner_gate.require(
                     action="abandon_mission",
-                    subject={"mission_id": mission_id, "contract_version": version, "closure": "abandoned"},
+                    subject={"mission_id": mission_id, "contract_version": version, "closure": "abandoned", "outcome_summary": outcome_summary},
                     summary=f"Abandon mission {mission_id} (contract v{version})",
                     preview={
                         "mission_id": mission_id,
@@ -1501,6 +1504,7 @@ class MissionEngine:
                         "abandon_reason": outcome_summary[:200],
                     },
                     owner_code=owner_code,
+                    approval_context=approval_context,
                 )
                 if not passed:
                     return gate_result

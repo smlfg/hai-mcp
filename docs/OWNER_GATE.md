@@ -43,7 +43,7 @@ Gated actions: `hai_accept_next_step`, `hai_recontract`,
 | --- | --- | --- |
 | `file` (default) | Writes `<challenge_id>.txt` (mode 0600) into `HAI_OWNER_HOME` (default `~/.hai-owner`, dir mode 0700). Refuses to run if that directory is inside `HAI_HOME`. | Exactly as strong as the filesystem boundary. If the agent runs as the same user with unrestricted file access, it can read the code. Use this when the agent's file access is confined (sandbox, container, separate user) — or for tests. |
 | `ntfy` | HTTP POST to `HAI_OWNER_NTFY_URL/HAI_OWNER_NTFY_TOPIC` (default server `https://ntfy.sh`; optional `HAI_OWNER_NTFY_TOKEN` as Bearer). The code lands on the owner's phone or desktop. | Off-machine: the agent cannot read it. The topic name is a secret — generate a random one, or self-host ntfy. Delivery failure keeps the gate closed (`owner_channel_unavailable`). |
-| `touchid` | The server process spawns `touchid_prompt.swift` (or `HAI_OWNER_TOUCHID_HELPER`). macOS shows a Touch ID / device-owner prompt whose reason text names the action, project, a short excerpt or diff, and the fingerprint prefix. | The MCP client has no code and no argument that means "approved". Only this server process, after the OS accepts the biometric or device password for that exact prompt, records the approval. See the threat model below. |
+| `touchid` | The server process spawns `touchid_prompt.swift` (or `HAI_OWNER_TOUCHID_HELPER`). macOS shows a Touch ID / device-owner prompt whose reason text shows readable agent, session title, topic, German action, and a bounded change excerpt; fingerprints and generated identifiers stay internal. | The MCP client has no code and no argument that means "approved". Only this server process, after the OS accepts the biometric or device password for that exact prompt, records the approval. See the threat model below. |
 
 Planned, not implemented: MCP elicitation (server asks the host UI directly,
 bypassing the model).
@@ -248,3 +248,31 @@ outcome: relayed, authenticated, ignored until expiry, or rejected. That
 yields the numbers HAI's thesis needs — approval latency, override/deny
 rate, and later the calibration of owner predictions — instead of a click
 count.
+
+
+## Readable Touch ID context
+
+The three gated tools accept optional `approval_context` with string fields `agent`,
+`session` (a human chat/session title), and `topic`. Example:
+
+```json
+{"approval_context": {"agent": "Codex", "session": "Touch ID verbessern", "topic": "Lesbare Freigabe"}}
+```
+
+These are client-provided display labels, **not authenticated identities**. If the
+agent label is absent, the MCP initialization `clientInfo.title` or `name` supplies
+it. MCP does not provide a human session title: callers must explicitly pass one.
+Missing or identifier-only labels display `Agent nicht benannt`,
+`Session nicht benannt`, or `Thema nicht benannt`; IDs are never used as fallbacks.
+The generated framing never shows mission/session/challenge IDs or hash prefixes.
+Actual user-supplied change content remains an excerpt, not a semantic filter.
+
+The reason is at most 360 characters: agent 40, session 56, topic 64 and change
+excerpt 96, each independently shortened with an ellipsis. All four decision
+fields remain present. Labels use NFC Unicode normalization, collapse whitespace,
+and replace Unicode control/format characters with spaces. Full normalized labels
+are bound into the approval fingerprint, including hidden suffixes and identifier-only
+labels. Every follow-up must repeat the same context; changing it needs new approval.
+Omitting context remains supported. Recontract reasons and abandon outcome summaries
+are also bound so the displayed decision cannot change under an existing approval.
+No changes to one-use, process-local approval, timeout, denial or fallback policy.

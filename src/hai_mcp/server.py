@@ -6,13 +6,14 @@ import os
 from typing import Annotated, Any
 
 import anyio
-from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp import Context, FastMCP
 from pydantic import Field
 
 from hai_mcp.boundary import strict_optional_time_limit_hours
 from hai_mcp.config import Config, SERVER_NAME
 from hai_mcp.http_transport import http_bind_allowed, http_token_from_env, wrap_with_bearer_token
 from hai_mcp.state import ControlPlane
+from hai_mcp.owner_gate import normalize_approval_context
 
 # The boundary deliberately refuses coercion (see boundary.py): a string "2" must be
 # rejected, never silently become 2. Bare `Any` however advertises a schema with no type
@@ -37,6 +38,20 @@ def get_control_plane() -> ControlPlane:
 
 def _json(result: dict[str, Any]) -> str:
     return json.dumps(result, indent=2, ensure_ascii=False, sort_keys=True)
+
+
+def _approval_context(value: dict[str, str] | None, ctx: Context | None) -> dict[str, str]:
+    """Prefer explicit labels; protocol clientInfo can only supply the agent label."""
+    labels = normalize_approval_context(value)
+    if "agent" not in labels and ctx is not None:
+        try:
+            params = ctx.session.client_params
+            info = params.clientInfo if params else None
+            agent = (getattr(info, "title", None) or info.name) if info else None
+            labels.update(normalize_approval_context({"agent": agent}))
+        except (ValueError, AttributeError):
+            pass  # Direct Python calls have no active MCP request context.
+    return labels
 
 
 @mcp.tool()
@@ -92,6 +107,8 @@ def hai_accept_next_step(
     reason: str | None = None,
     content: str | None = None,
     owner_ack: StrictBool = False,
+    approval_context: dict[str, str] | None = None,
+    ctx: Context | None = None,
 ) -> str:
     """Promote proposed (or provided) content to canonical NEXT_STEP.md — owner-gated.
 
@@ -100,6 +117,9 @@ def hai_accept_next_step(
     a Touch ID prompt in the server process; when status is owner_approved, call again with
     the same arguments and no owner_code. Bound to the exact content, single-use.
     Legacy gate (ack_legacy): owner_ack=true + reason.
+    Supply approval_context with agent, session (readable chat title), and topic.
+    Labels are client-provided display context, not authenticated identity.
+    Repeat the same labels on the follow-up call; changed labels require new approval.
     """
     return _json(
         get_control_plane().accept_next_step(
@@ -108,6 +128,7 @@ def hai_accept_next_step(
             reason=reason,
             content=content,
             owner_code=owner_code,
+            approval_context=_approval_context(approval_context, ctx),
         )
     )
 
@@ -260,12 +281,17 @@ def hai_recontract(
     mode: str = "normal",
     break_glass_marker: StrictBool = False,
     owner_code: str | None = None,
+    approval_context: dict[str, str] | None = None,
+    ctx: Context | None = None,
 ) -> str:
     """Apply a visible field-level contract diff; revokes all leases. Owner-gated.
 
     First call (no owner_code) returns the diff. file/ntfy delivers a one-time code to the
     owner; call again with owner_code. touchid (macOS): when status is owner_approved, call
     again with the same arguments and no owner_code. Legacy gate: owner_ack=true.
+    Supply approval_context with agent, session (readable chat title), and topic.
+    Labels are client-provided display context, not authenticated identity.
+    Repeat the same labels on the follow-up call; changed labels require new approval.
     """
     return _json(
         get_control_plane().recontract(
@@ -277,6 +303,7 @@ def hai_recontract(
             owner_ack=owner_ack,
             break_glass_marker=break_glass_marker,
             owner_code=owner_code,
+            approval_context=_approval_context(approval_context, ctx),
         )
     )
 
@@ -291,12 +318,17 @@ def hai_close_mission(
     owner_ack: StrictBool = False,
     device_id: str | None = None,
     owner_code: str | None = None,
+    approval_context: dict[str, str] | None = None,
+    ctx: Context | None = None,
 ) -> str:
     """Complete with verified per-criterion evidence, or abandon (owner-gated).
 
     Abandon: file/ntfy delivers a one-time code; call again with owner_code. touchid (macOS):
     when status is owner_approved, call again with the same arguments and no owner_code.
     Legacy gate: owner_ack=true.
+    Supply approval_context with agent, session (readable chat title), and topic.
+    Labels are client-provided display context, not authenticated identity.
+    Repeat the same labels on the follow-up call; changed labels require new approval.
     """
     return _json(
         get_control_plane().close_mission(
@@ -308,6 +340,7 @@ def hai_close_mission(
             owner_ack=owner_ack,
             device_id=device_id,
             owner_code=owner_code,
+            approval_context=_approval_context(approval_context, ctx),
         )
     )
 

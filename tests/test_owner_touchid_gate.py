@@ -151,11 +151,11 @@ def test_success_records_approval_then_follow_up_applies_once(
     assert plane.status()["pending_owner_challenges"] == 1
     assert len(calls) == 1
     reason = calls[0]["reason"]
-    assert "accept_next_step" in reason
-    assert project.name in reason
+    assert "Aktion: Nächsten Schritt übernehmen" in reason
+    assert "Session: Session nicht benannt" in reason
     assert "do the thing" in reason
-    assert calls[0]["fingerprint"].removeprefix("sha256:")[:12] in reason
-    assert len(reason) <= 120
+    assert calls[0]["fingerprint"].removeprefix("sha256:")[:12] not in reason
+    assert len(reason) <= 360
     record = _record(plane, pending["challenge_id"])
     assert record["status"] == "approved" and record["approval"] == "touchid"
     assert "code_hash" not in record and "salt" not in record
@@ -368,7 +368,7 @@ def test_recontract_and_abandon_are_bound_to_the_change(tmp_path: Path, project:
     assert first["status"] == "owner_approved" and first["channel"] == "touchid"
     assert any(item["field"] == "objective" for item in first["diff"])
     assert plane.mission.load_mission_meta(opened["mission_id"])["current_version"] == 1
-    assert "recontract" in seen[-1] and "diff:" in seen[-1] and "fp " in seen[-1]
+    assert "Aktion: Auftrag ändern" in seen[-1] and "Ziel:" in seen[-1] and "fp " not in seen[-1]
 
     swapped = plane.recontract(**base, changes={"objective": "Wipe the archive"})
     assert swapped["status"] == "owner_approved"
@@ -389,7 +389,7 @@ def test_recontract_and_abandon_are_bound_to_the_change(tmp_path: Path, project:
     )
     parked = plane.close_mission(**abandon_args, owner_ack=True)
     assert parked["status"] == "owner_approved"
-    assert "abandon_mission" in seen[-1] and "scope no longer needed" in seen[-1]
+    assert "Aktion: Auftrag abbrechen" in seen[-1] and "scope no longer needed" in seen[-1]
     assert plane.mission.load_mission_meta(opened["mission_id"])["status"] == "active"
     done = plane.close_mission(**abandon_args)
     assert done["ok"] is True and done["status"] == "abandoned"
@@ -596,10 +596,10 @@ def test_from_env_touchid_and_bad_fallback(monkeypatch: pytest.MonkeyPatch, tmp_
 def test_reason_truncates_a_long_diff() -> None:
     preview = {"diff": "x" * 500, "project_path": "/work/proj"}
     reason = og.build_touchid_reason("recontract", "a long summary", preview, "sha256:" + "cd" * 32)
-    assert len(reason) <= 120
-    assert reason.startswith("recontract · proj")
-    assert "fp " + ("cd" * 6) in reason  # first 12 hex chars of the fingerprint
-    assert "diff:" in reason
+    assert len(reason) <= 360
+    assert "Aktion: Auftrag ändern" in reason
+    assert "cd" * 6 not in reason
+    assert "Änderung: " in reason
 
 
 def test_body_sha_binding_uses_the_same_fingerprint_as_the_gate(tmp_path: Path, project: Path) -> None:
@@ -630,3 +630,92 @@ def test_body_sha_binding_uses_the_same_fingerprint_as_the_gate(tmp_path: Path, 
     assert not _canonical(project).exists()
     retired = _record(plane, pending["challenge_id"])
     assert retired["status"] == "cancelled" and retired["cancel_reason"] == "approval_not_in_process"
+
+
+@pytest.mark.parametrize("field", ["agent", "session", "topic"])
+@pytest.mark.parametrize("action", ["accept", "recontract", "abandon"])
+def test_changed_labels_require_new_approval_for_each_action(
+    tmp_path: Path, project: Path, field: str, action: str
+) -> None:
+    calls = []
+    plane = _plane(tmp_path, lambda p: (calls.append(p), _ok(p))[1])
+    context = {"agent": "Codex", "session": "Touch ID verbessern", "topic": "Lesbare Freigabe"}
+    if action == "accept":
+        call = lambda labels: _accept(plane, project, approval_context=labels)
+    else:
+        opened = _open(plane, project)
+        if action == "recontract":
+            call = lambda labels: plane.recontract(
+                mission_id=opened["mission_id"], contract_version=1,
+                reason="Klarer Umfang", changes={"objective": "Nur Tests"}, approval_context=labels)
+        else:
+            call = lambda labels: plane.close_mission(
+                mission_id=opened["mission_id"], contract_version=1, evidence=None,
+                outcome_summary="Nicht mehr benötigt", closure="abandoned", approval_context=labels)
+    first = call(context)
+    changed = call({**context, field: context[field] + " geändert"})
+    assert first["status"] == changed["status"] == "owner_approved"
+    assert first["fingerprint"] != changed["fingerprint"]
+    assert len(calls) == 2
+    assert call(context)["ok"] is True
+    assert len(calls) == 2
+
+
+def test_normalized_labels_and_long_hidden_suffix_are_bound(tmp_path: Path, project: Path) -> None:
+    seen = []
+    plane = _plane(tmp_path, lambda p: (seen.append(p), _ok(p))[1])
+    context = {"agent": " Codex\x00 \nAgent ", "session": " Arbeit\u202e läuft ", "topic": "Freigabe"}
+    first = _accept(plane, project, approval_context=context)
+    assert "Agent: Codex Agent" in seen[-1]["reason"]
+    assert "Session: Arbeit läuft" in seen[-1]["reason"]
+    assert "\x00" not in seen[-1]["reason"] and "\u202e" not in seen[-1]["reason"]
+    assert _accept(plane, project, approval_context={"agent": "Codex Agent", "session": "Arbeit läuft", "topic": "Freigabe"})["ok"]
+    assert len(seen) == 1
+    context = {key: "lang " * 200 for key in ("agent", "session", "topic")}
+    first = _accept(plane, project, approval_context=context)
+    changed = _accept(plane, project, approval_context={**context, "topic": context["topic"] + "neu"})
+    assert first["fingerprint"] != changed["fingerprint"]
+    reason = seen[-1]["reason"]
+    assert len(reason) <= 360
+    for label in ("Agent:", "Session:", "Thema:", "Aktion:", "Änderung:", "do the thing"):
+        assert label in reason
+
+
+def test_generated_identifiers_are_not_used_as_missing_labels() -> None:
+    mission_id = "M-20261022T090000-deadbeef"
+    reason = og.build_touchid_reason("abandon_mission", f"Abandon {mission_id}", {
+        "mission_id": mission_id, "session_id": "S-deadbeef", "abandon_reason": "Erledigt",
+    }, "sha256:" + "ab" * 32)
+    assert "Agent: Agent nicht benannt" in reason
+    assert "Session: Session nicht benannt" in reason
+    assert "Thema: Thema nicht benannt" in reason
+    for technical in (mission_id, "S-deadbeef", "abababab", "sha256", "abandon_mission", "abandon_reason"):
+        assert technical not in reason
+
+
+def test_changed_visible_reason_cannot_redeem_old_mission_approval(tmp_path: Path, project: Path) -> None:
+    plane = _plane(tmp_path, _ok)
+    opened = _open(plane, project)
+    base = dict(mission_id=opened["mission_id"], contract_version=1, changes={"objective": "Nur Tests"})
+    one = plane.recontract(**base, reason="Zuerst")
+    two = plane.recontract(**base, reason="Anderer Grund")
+    assert one["fingerprint"] != two["fingerprint"]
+    close = dict(mission_id=opened["mission_id"], contract_version=1, closure="abandoned", evidence=None)
+    one = plane.close_mission(**close, outcome_summary="Zuerst")
+    two = plane.close_mission(**close, outcome_summary="Anderer Grund")
+    assert one["fingerprint"] != two["fingerprint"]
+
+
+@pytest.mark.parametrize("opaque", ["01a16479-9479-7eb3-8bf1-df7c27bbfcb2", "S-deadbeef", "M-20261022T090000-deadbeef", "C-deadbeef", "sha256:" + "ab" * 32, "deadbeefdeadbeef"])
+def test_opaque_identity_labels_are_hidden_but_still_bound(tmp_path: Path, project: Path, opaque: str) -> None:
+    seen = []
+    plane = _plane(tmp_path, lambda p: (seen.append(p), _ok(p))[1])
+    context = {"agent": opaque, "session": opaque, "topic": "PR 13"}
+    first = _accept(plane, project, approval_context=context)
+    reason = seen[-1]["reason"]
+    assert opaque not in reason
+    assert "Agent: Agent nicht benannt" in reason
+    assert "Session: Session nicht benannt" in reason
+    assert "Thema: PR 13" in reason
+    second = _accept(plane, project, approval_context={**context, "session": "C-deadfeed"})
+    assert first["fingerprint"] != second["fingerprint"]
