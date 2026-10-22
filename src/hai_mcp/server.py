@@ -95,10 +95,11 @@ def hai_accept_next_step(
 ) -> str:
     """Promote proposed (or provided) content to canonical NEXT_STEP.md — owner-gated.
 
-    Default gate (nonce): call once WITHOUT owner_code; a one-time code is delivered to the
-    owner (never to this client). Ask the owner for it and call again with owner_code=<code>.
-    The code is bound to the exact content and is single-use. Legacy gate (ack_legacy):
-    owner_ack=true + reason.
+    Default gate (nonce): call once WITHOUT owner_code. file/ntfy delivers a one-time code
+    to the owner (never to this client); call again with owner_code. touchid (macOS) shows
+    a Touch ID prompt in the server process; when status is owner_approved, call again with
+    the same arguments and no owner_code. Bound to the exact content, single-use.
+    Legacy gate (ack_legacy): owner_ack=true + reason.
     """
     return _json(
         get_control_plane().accept_next_step(
@@ -262,8 +263,9 @@ def hai_recontract(
 ) -> str:
     """Apply a visible field-level contract diff; revokes all leases. Owner-gated.
 
-    First call (no owner_code) returns the diff and delivers a one-time code to the owner;
-    call again with owner_code=<code from the owner>. Legacy gate: owner_ack=true.
+    First call (no owner_code) returns the diff. file/ntfy delivers a one-time code to the
+    owner; call again with owner_code. touchid (macOS): when status is owner_approved, call
+    again with the same arguments and no owner_code. Legacy gate: owner_ack=true.
     """
     return _json(
         get_control_plane().recontract(
@@ -292,7 +294,8 @@ def hai_close_mission(
 ) -> str:
     """Complete with verified per-criterion evidence, or abandon (owner-gated).
 
-    Abandon: first call delivers a one-time code to the owner; call again with owner_code.
+    Abandon: file/ntfy delivers a one-time code; call again with owner_code. touchid (macOS):
+    when status is owner_approved, call again with the same arguments and no owner_code.
     Legacy gate: owner_ack=true.
     """
     return _json(

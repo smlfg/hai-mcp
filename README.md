@@ -60,7 +60,7 @@ human. Concretely, an MCP control-plane:
 | **Session leasing** | `hai_authorize_session` — time-bounded, contract-versioned |
 | **Activity classification** | `hai_check_activity` / `hai_drift_check` — on-contract vs. off-contract |
 | **Focus & lanes** | `hai_set_focus`, `hai_status` — at most 2 ACTIVE lanes |
-| **Owner gate** | one-time nonces out-of-band (`HAI_OWNER_HOME` or ntfy) for `accept` / `recontract` / `abandon` |
+| **Owner gate** | one-time nonces out-of-band (`HAI_OWNER_HOME` or ntfy), or Touch ID on macOS, for `accept` / `recontract` / `abandon` |
 | **Evidence & closure** | `hai_proof`, `hai_close_mission`, `hai_stop` |
 | **Inbox & intake** | `hai_intake`, `hai_distill`, `hai_park`, `hai_park_item` |
 | **Recovery** | `hai_checkpoint`, `hai_recover` |
@@ -88,9 +88,12 @@ judge — agents call it to ask *"may I?"* and to record *"I did"*.
   observed activity against the contract without ever calling an LLM.
 - **Two-principal owner gate**:
   - **Default (nonce):** the server delivers a one-time code to the owner
-    channel (`HAI_OWNER_HOME/file` or ntfy). The client never sees the code.
-    The code is bound to the exact change, single-use, expiring; only the
-    hash is stored in `HAI_HOME`.
+    channel (`HAI_OWNER_HOME` / `file`, or ntfy). The client never sees the
+    code. The code is bound to the exact change, single-use, expiring; only
+    the hash is stored in `HAI_HOME`.
+  - **`touchid` (macOS):** the server process shows a Touch ID prompt for
+    that exact change. There is no code. The agent's follow-up call applies
+    it; the client cannot approve itself.
   - **`ack_legacy`:** the old self-asserted `owner_ack` flag — an honor
     system, surfaced as such by `hai_health`.
 - **Mount table** — `hai_bind_project` joins a logical `project_id` to a
@@ -101,7 +104,7 @@ judge — agents call it to ask *"may I?"* and to record *"I did"*.
   bearer-token binding (loopback only by default).
 - **Checkpoint & recover** — `hai_checkpoint` snapshots context; `hai_recover`
   returns the smallest recovery next action.
-- **139 tests green** — the engine is covered; the slice remains open
+- **203 tests green** — the engine is covered; the slice remains open
   for the learning-budget and owner-instrument follow-ups.
 
 ---
@@ -256,11 +259,23 @@ hai_proof(
 ### 5. Owner-gated promotion
 
 For `hai_accept_next_step`, `hai_recontract`, or abandoning a mission, the
-first call **without** `owner_code` delivers a one-time code to the owner's
-channel (the `file` sink in `HAI_OWNER_HOME`, or an ntfy topic). Relaying
-that code back as `owner_code=<code>` completes the action. The code is
-bound to the exact change, single-use, and only its hash is persisted in
-`HAI_HOME`. Detail: [`docs/OWNER_GATE.md`](docs/OWNER_GATE.md).
+first call **without** `owner_code` asks the owner out of band.
+
+- **`file` / `ntfy`:** a one-time code is delivered to `HAI_OWNER_HOME` or
+  an ntfy topic. Relaying it back as `owner_code=<code>` completes the
+  action. The client never sees the code; only its hash is stored in
+  `HAI_HOME`.
+- **`touchid` (macOS):** set `HAI_OWNER_CHANNEL=touchid` on the server.
+  The server shows a Touch ID prompt and returns `status: owner_approved`.
+  Call the same tool again with the same arguments (no code) to apply that
+  exact change. Optional: `HAI_OWNER_TOUCHID_TIMEOUT` (default 60),
+  `HAI_OWNER_TOUCHID_HELPER` (a compiled binary), and
+  `HAI_OWNER_TOUCHID_FALLBACK=file` only when Touch ID cannot run.
+
+The approval is bound to the exact change and is single-use. On a Mac,
+`uv run python scripts/manual_touchid.py prompt` and `… gate` exercise the
+real sensor; CI mocks the helper. Detail:
+[`docs/OWNER_GATE.md`](docs/OWNER_GATE.md).
 
 ---
 
@@ -291,7 +306,7 @@ hai-mcp/
 │   └── visuals/              # mission-lifecycle banner assets
 ├── scripts/                  # stdio smoke + impact-eval runner
 ├── src/hai_mcp/              # the server
-└── tests/                    # 139 tests
+└── tests/                    # 203 tests
 ```
 
 ---
@@ -335,7 +350,7 @@ uv run pytest                       # full suite
 uv run python scripts/stdio_smoke.py  # stdio round-trip smoke
 ```
 
-The repo carries **139 green tests** as of the `0.1.0` slice. CI status
+The repo carries **203 green tests** as of the Touch ID owner-channel slice. CI status
 lives on the GitHub Actions page of the repository.
 
 ---
