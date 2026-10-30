@@ -480,6 +480,11 @@ class ControlPlane:
         non_goals: list[str] | None,
         constraints: dict[str, Any] | None,
         owner: str,
+        supersede_orphan: Any = False,
+        supersede_reason: str = "",
+        owner_ack: Any = False,
+        owner_code: Any = None,
+        approval_context: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         return self.mission.open_mission(
             objective=objective,
@@ -488,6 +493,11 @@ class ControlPlane:
             non_goals=non_goals,
             constraints=constraints,
             owner=owner,
+            supersede_orphan=supersede_orphan,
+            supersede_reason=supersede_reason,
+            owner_ack=owner_ack,
+            owner_code=owner_code,
+            approval_context=approval_context,
         )
 
     def authorize_session(

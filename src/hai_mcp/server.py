@@ -199,8 +199,20 @@ def hai_open_mission(
     owner: str,
     non_goals: list[str] | None = None,
     constraints: dict[str, Any] | None = None,
+    supersede_orphan: StrictBool = False,
+    supersede_reason: str = "",
+    owner_ack: StrictBool = False,
+    owner_code: str | None = None,
+    approval_context: dict[str, str] | None = None,
+    ctx: Context | None = None,
 ) -> str:
     """Open a bounded mission with a versioned canonical contract.
+
+    Orphaned blocker: if active_mission_exists comes back with orphaned=true (no valid session
+    lease left), retry with supersede_orphan=true + supersede_reason. That abandons the orphan
+    under the owner gate exactly like hai_close_mission(closure="abandoned") (touchid: on
+    owner_approved call again with the same arguments), then opens this mission. A mission
+    with a live lease is never superseded.
 
     Default: one active mission. An owner-enabled exact-project capacity window permits
     at most five missions with disjoint canonical contract paths and five writers globally.
@@ -218,6 +230,11 @@ def hai_open_mission(
             non_goals=non_goals,
             constraints=constraints,
             owner=owner,
+            supersede_orphan=supersede_orphan,
+            supersede_reason=supersede_reason,
+            owner_ack=owner_ack,
+            owner_code=owner_code,
+            approval_context=_approval_context(approval_context, ctx),
         )
     )
 
