@@ -8,6 +8,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from hai_mcp.capacity import capacity_window
+from hai_mcp.worktrees import isolation_identities, check_isolation_snapshot
+import subprocess
 from hai_mcp.boundary import strict_int
 from hai_mcp.config import Config, ensure_hai_home
 from hai_mcp.ids import validate_intake_id
@@ -82,8 +85,24 @@ class ControlPlane:
     def save_active(self, data: dict[str, Any]) -> None:
         write_json(self.active_path, data)
 
+    def _lane_isolation(self, active: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+        lanes = active if active is not None else self.load_active().get("active", [])
+        try:
+            identities = isolation_identities(self.cfg.hai_home, [item.get("project_path", "") for item in lanes])
+            snapshot = self.load_active().get("worktree_isolation")
+            if len(lanes) > 2 and snapshot:
+                window = capacity_window(self.cfg.hai_home)
+                if snapshot.get("window_fingerprint") != window.get("fingerprint"):
+                    raise ValueError("lane isolation belongs to another capacity window")
+                check_isolation_snapshot(identities, snapshot.get("identities"))
+            return {"eligible_above_two": True, "recovery_required": False, "limit": 5, "identities": identities}
+        except (ValueError, TypeError, KeyError, AttributeError, OSError, subprocess.SubprocessError) as exc:
+            return {"eligible_above_two": False, "recovery_required": len(lanes) > 2,
+                    "limit": min(2, self.cfg.max_active_lanes), "reason": str(exc)}
+
     def health(self, project_path: str | None = None) -> dict[str, Any]:
         home = ensure_hai_home(self.cfg)
+        lane_isolation = self._lane_isolation()
         result: dict[str, Any] = {
             "ok": True,
             "server": "hai-mcp",
@@ -91,7 +110,10 @@ class ControlPlane:
             "hai_home": str(home),
             "hai_home_writable": os.access(home, os.W_OK),
             "model_calls": False,
-            "max_active_lanes": self.cfg.max_active_lanes,
+            "max_active_lanes": lane_isolation["limit"],
+            "lane_isolation": lane_isolation,
+            "capacity_window": capacity_window(self.cfg.hai_home),
+            "mission_capacity": self.mission.capacity_status(),
             "kernel": "contract_kernel",
             "authenticated_owner": False,
             "semantic_verification": False,
@@ -113,13 +135,17 @@ class ControlPlane:
 
     def status(self, project_path: str | None = None) -> dict[str, Any]:
         active = self.load_active()
+        lane_isolation = self._lane_isolation(active.get("active", []))
         inbox_count = len(list(self.inbox_dir.glob("*.md"))) if self.inbox_dir.is_dir() else 0
         out: dict[str, Any] = {
             "ok": True,
             "focus_id": active.get("focus_id"),
             "active": active.get("active", []),
             "active_count": len(active.get("active", [])),
-            "max_active_lanes": self.cfg.max_active_lanes,
+            "max_active_lanes": lane_isolation["limit"],
+            "lane_isolation": lane_isolation,
+            "capacity_window": capacity_window(self.cfg.hai_home),
+            "mission_capacity": self.mission.capacity_status(),
             "inbox_count": inbox_count,
             "hai_home": str(self.cfg.hai_home),
             "owner_gate": self.cfg.owner_gate,
@@ -225,62 +251,50 @@ class ControlPlane:
             "message": "parked; ACTIVE lanes not modified",
         }
 
-    def set_focus(
-        self,
-        focus_id: str,
-        project_path: str | None = None,
-        label: str | None = None,
-    ) -> dict[str, Any]:
+    def set_focus(self, focus_id: str, project_path: str | None = None, label: str | None = None) -> dict[str, Any]:
+        with mission_state_lock(self.cfg.hai_home):
+            return self._set_focus(focus_id, project_path, label)
+
+    def _set_focus(self, focus_id: str, project_path: str | None = None, label: str | None = None) -> dict[str, Any]:
         if not focus_id or not str(focus_id).strip():
             return {"ok": False, "error": "invalid_args", "message": "focus_id is required"}
         focus_id = focus_id.strip()
         data = self.load_active()
-        active: list[dict[str, Any]] = list(data.get("active", []))
-        existing_ids = {item.get("id") for item in active}
-        if focus_id not in existing_ids:
-            if len(active) >= self.cfg.max_active_lanes:
-                return {
-                    "ok": False,
-                    "error": "max_active_lanes",
-                    "message": (
-                        f"already {len(active)} ACTIVE lanes "
-                        f"(max {self.cfg.max_active_lanes}); park or drop one first"
-                    ),
-                    "active": active,
-                }
-            entry: dict[str, Any] = {
-                "id": focus_id,
-                "label": label or focus_id,
-                "activated_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
-            }
-            if project_path:
-                try:
-                    project = require_project_path(project_path)
-                    entry["project_path"] = str(project)
-                except PathError as exc:
-                    return {"ok": False, "error": exc.code, "message": exc.message}
+        active = [dict(item) for item in data.get("active", [])]
+        entry = next((item for item in active if item.get("id") == focus_id), None)
+        if entry is None:
+            entry = {"id": focus_id, "label": label or focus_id,
+                     "activated_at": time.strftime("%Y-%m-%dT%H:%M:%S%z")}
             active.append(entry)
+        elif label:
+            entry["label"] = label
+        if project_path:
+            # Keep the raw value until the >2 exact-root check; normalization must not bless aliases.
+            entry["project_path"] = project_path
+        if len(active) > 5:
+            return {"ok": False, "error": "max_active_lanes", "message": "at most five active lanes", "active": data.get("active", [])}
+        if len(active) > 2 and not capacity_window(self.cfg.hai_home)["active"]:
+            return {"ok": False, "error": "max_active_lanes", "message": "baseline maximum two active lanes"}
+        isolation = self._lane_isolation(active)
+        if len(active) > 2 and not isolation["eligible_above_two"]:
+            return {"ok": False, "error": "worktree_isolation_required", "message": isolation.get("reason"),
+                    "required_action": "recover_lane_worktrees", "active": data.get("active", [])}
+        if len(active) <= 2 and len(active) > min(self.cfg.max_active_lanes, 2):
+            return {"ok": False, "error": "max_active_lanes", "message": "baseline active-lane limit reached"}
+        if project_path:
+            try:
+                entry["project_path"] = str(require_project_path(project_path))
+            except PathError as exc:
+                return {"ok": False, "error": exc.code, "message": exc.message}
+        if len(active) > 2:
+            data["worktree_isolation"] = {"window_fingerprint": capacity_window(self.cfg.hai_home)["fingerprint"],
+                                          "identities": isolation["identities"]}
         else:
-            # update label/project if provided
-            for item in active:
-                if item.get("id") == focus_id:
-                    if label:
-                        item["label"] = label
-                    if project_path:
-                        try:
-                            project = require_project_path(project_path)
-                            item["project_path"] = str(project)
-                        except PathError as exc:
-                            return {"ok": False, "error": exc.code, "message": exc.message}
+            data.pop("worktree_isolation", None)
         data["active"] = active
         data["focus_id"] = focus_id
         self.save_active(data)
-        return {
-            "ok": True,
-            "focus_id": focus_id,
-            "active": active,
-            "active_count": len(active),
-        }
+        return {"ok": True, "focus_id": focus_id, "active": active, "active_count": len(active)}
 
     def propose_next_step(self, project_path: str, content: str) -> dict[str, Any]:
         if not content or not str(content).strip():
@@ -310,6 +324,7 @@ class ControlPlane:
         reason: str | None = None,
         content: str | None = None,
         owner_code: Any = None,
+        approval_context: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         reason_text = str(reason or "").strip()
 
@@ -366,6 +381,7 @@ class ControlPlane:
                 summary=f"Accept NEXT_STEP for {project.name}",
                 preview={"project_path": str(project), "next_step": body.strip()[:600]},
                 owner_code=owner_code,
+                approval_context=approval_context,
             )
             if not passed:
                 return gate_result
@@ -487,6 +503,7 @@ class ControlPlane:
         criterion_ids: list[str] | None = None,
         device_id: str | None = None,
         harness_id: str | None = None,
+        write_paths: list[str] | None = None,
     ) -> dict[str, Any]:
         return self.mission.authorize_session(
             mission_id=mission_id,
@@ -500,7 +517,12 @@ class ControlPlane:
             criterion_ids=criterion_ids,
             device_id=device_id,
             harness_id=harness_id,
+            write_paths=write_paths,
         )
+
+    def bind_worktree(self, project_path: str, worktree_path: str, expires_at: str, reason: str,
+                      approval_context: dict[str, str] | None = None) -> dict[str, Any]:
+        return self.mission.bind_worktree(project_path, worktree_path, expires_at, reason, approval_context)
 
     def bind_project(
         self,
@@ -569,6 +591,7 @@ class ControlPlane:
         owner_ack: Any = False,
         break_glass_marker: Any = False,
         owner_code: Any = None,
+        approval_context: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         return self.mission.recontract(
             mission_id=mission_id,
@@ -579,6 +602,7 @@ class ControlPlane:
             owner_ack=owner_ack,
             break_glass_marker=break_glass_marker,
             owner_code=owner_code,
+            approval_context=approval_context,
         )
 
     def close_mission(
@@ -591,6 +615,7 @@ class ControlPlane:
         owner_ack: Any = False,
         device_id: str | None = None,
         owner_code: Any = None,
+        approval_context: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         return self.mission.close_mission(
             mission_id=mission_id,
@@ -601,6 +626,7 @@ class ControlPlane:
             owner_ack=owner_ack,
             device_id=device_id,
             owner_code=owner_code,
+            approval_context=approval_context,
         )
 
     # --- Additional daily-loop flow surface (thin, over the hardened engine) ---
@@ -726,7 +752,14 @@ class ControlPlane:
             active = self.mission.load_active_pointer()
             if active.get("mission_id") and active.get("status") == "active":
                 paused_mission = active["mission_id"]
-                revoked = self.mission.revoke_all_sessions(paused_mission, reason="day_stopped")
+            paused_missions = []
+            for folder in sorted(self.mission.missions_dir.glob("M-*")):
+                if folder.is_symlink() or self.mission._reject_mission_id(folder.name):
+                    continue
+                meta = self.mission.load_mission_meta(folder.name)
+                if meta and meta.get("status") in {"active", "capacity_revoked"}:
+                    paused_missions.append(folder.name)
+                    revoked.extend(self.mission.revoke_all_sessions(folder.name, reason="day_stopped"))
 
         stop_id = _new_id("A")
         self.stop_dir.mkdir(parents=True, exist_ok=True)
@@ -744,6 +777,7 @@ class ControlPlane:
             "agency_gained": str(agency_gained or "").strip(),
             "manual_practice": practice,
             "paused_mission": paused_mission,
+            "paused_missions": paused_missions,
             "revoked_sessions": revoked,
             "next_mission": None,
             "stopped_at": _utc_now(),
@@ -757,6 +791,7 @@ class ControlPlane:
             "path": str(path),
             "manual_practice": practice,
             "paused_mission": paused_mission,
+            "paused_missions": paused_missions,
             "revoked_sessions": revoked,
             "next_mission": None,
             "message": "day sealed; leases invalidated; no next-day plan; parked items stay parked",
