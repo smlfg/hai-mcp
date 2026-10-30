@@ -164,6 +164,13 @@ tools. Drop the snippet into the client's MCP config and restart.
 
 ### Cursor
 
+**Cursor plugin:** this repo is also a Cursor plugin (`.cursor-plugin/plugin.json` +
+`mcp.json`). It starts the server from PyPI with `uvx hai-mcp`, state goes to
+`~/.hai` and `~/.hai-owner` by default. Requires [uv](https://docs.astral.sh/uv/).
+
+Manual config:
+
+
 ```json
 {
   "mcpServers": {
