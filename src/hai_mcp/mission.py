@@ -407,7 +407,47 @@ class MissionEngine:
         non_goals: list[str] | None,
         constraints: dict[str, Any] | None,
         owner: str,
+        supersede_orphan: Any = False,
+        supersede_reason: str = "",
+        owner_ack: Any = False,
+        owner_code: Any = None,
     ) -> dict[str, Any]:
+        orphan: dict[str, Any] | None = None
+        with mission_state_lock(self.cfg.hai_home):
+            active = self.load_active_pointer()
+            if active.get("mission_id") and active.get("status") == "active":
+                orphan = self._orphan_info(str(active["mission_id"]))
+                if orphan is None or supersede_orphan is not True:
+                    refusal: dict[str, Any] = {
+                        "ok": False,
+                        "error": "active_mission_exists",
+                        "message": "only one active mission is allowed until close or abandon",
+                        "active_mission_id": active["mission_id"],
+                    }
+                    if orphan is not None:
+                        refusal["orphaned"] = True
+                        refusal["orphan"] = orphan
+                        refusal["next_action"] = (
+                            "no valid session lease remains on the active mission; retry with "
+                            "supersede_orphan=true and supersede_reason to abandon it (owner gate) "
+                            "and open this mission"
+                        )
+                    return refusal
+
+        if orphan is not None:
+            return self._supersede_orphan(
+                orphan,
+                objective=objective,
+                artifact=artifact,
+                done_criteria=done_criteria,
+                non_goals=non_goals,
+                constraints=constraints,
+                owner=owner,
+                supersede_reason=supersede_reason,
+                owner_ack=owner_ack,
+                owner_code=owner_code,
+            )
+
         with mission_state_lock(self.cfg.hai_home):
             active = self.load_active_pointer()
             if active.get("mission_id") and active.get("status") == "active":
@@ -496,6 +536,104 @@ class MissionEngine:
                 "contract": contract_body,
                 "audit_event_id": audit["event_id"],
             }
+
+    def _orphan_info(self, mission_id: str) -> dict[str, Any] | None:
+        """Describe the active mission when no session lease on it is still valid; else None."""
+        meta = self.load_mission_meta(mission_id)
+        if not meta or meta.get("status") != "active":
+            return None
+        contract = self.current_contract(mission_id)
+        sessions = self.list_sessions(mission_id)
+        for session in sessions:
+            if session.get("status") == "active" and self._session_valid(session, contract)[0]:
+                return None
+        now = _utc_now()
+        stamps = [str(meta.get("created_at") or "")]
+        for session in sessions:
+            stamps += [str(session[k]) for k in ("granted_at", "revoked_at") if session.get(k)]
+            if session.get("expires_at") and str(session["expires_at"]) < now:
+                stamps.append(str(session["expires_at"]))
+        last = max(sessions, key=lambda s: str(s.get("granted_at", "")), default={})
+        return {
+            "mission_id": mission_id,
+            "contract_version": int(meta["current_version"]),
+            "owner": meta.get("owner"),
+            "last_agent": last.get("agent_identity"),
+            "objective": str((contract or {}).get("objective", ""))[:200],
+            "session_count": len(sessions),
+            "last_activity_at": max(stamps),
+        }
+
+    def _supersede_orphan(
+        self,
+        orphan: dict[str, Any],
+        *,
+        objective: str,
+        artifact: str,
+        done_criteria: list[Any] | None,
+        non_goals: list[str] | None,
+        constraints: dict[str, Any] | None,
+        owner: str,
+        supersede_reason: str,
+        owner_ack: Any,
+        owner_code: Any,
+    ) -> dict[str, Any]:
+        reason = str(supersede_reason or "").strip()
+        if not reason:
+            return {
+                "ok": False,
+                "error": "invalid_args",
+                "message": "supersede_reason is required to supersede an orphaned mission",
+                "orphan": orphan,
+            }
+        # Validate the new payload first: never abandon the orphan for a mission that cannot open.
+        _, issues, validation = self._validate_open_payload(
+            objective, artifact, done_criteria, non_goals, constraints, owner,
+            require_mount_fields=True,
+        )
+        if validation == "review_required":
+            return {
+                "ok": False,
+                "error": "review_required",
+                "status": "review_required",
+                "issues": issues,
+                "orphan": orphan,
+                "message": "new mission payload needs review; orphan was not superseded",
+            }
+        closed = self.close_mission(
+            mission_id=orphan["mission_id"],
+            contract_version=orphan["contract_version"],
+            evidence=None,
+            outcome_summary=f"orphaned (no valid session lease); superseded: {reason}",
+            closure="abandoned",
+            owner_ack=owner_ack,
+            device_id=(constraints or {}).get("device_id"),
+            owner_code=owner_code,
+        )
+        if not closed.get("ok"):
+            closed["orphan"] = orphan
+            return closed
+        opened = self.open_mission(
+            objective=objective,
+            artifact=artifact,
+            done_criteria=done_criteria,
+            non_goals=non_goals,
+            constraints=constraints,
+            owner=owner,
+        )
+        opened["superseded_mission_id"] = orphan["mission_id"]
+        opened["superseded_audit_event_id"] = closed.get("audit_event_id")
+        if opened.get("ok"):
+            self.append_audit(
+                "mission_superseded",
+                {
+                    "mission_id": opened["mission_id"],
+                    "superseded_mission_id": orphan["mission_id"],
+                    "abandon_audit_event_id": closed.get("audit_event_id"),
+                    "reason": reason,
+                },
+            )
+        return opened
 
     def bind_project(
         self,

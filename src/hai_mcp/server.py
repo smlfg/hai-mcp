@@ -132,8 +132,19 @@ def hai_open_mission(
     owner: str,
     non_goals: list[str] | None = None,
     constraints: dict[str, Any] | None = None,
+    supersede_orphan: StrictBool = False,
+    supersede_reason: str = "",
+    owner_ack: StrictBool = False,
+    owner_code: str | None = None,
 ) -> str:
-    """Open a bounded mission with a versioned canonical contract. One active mission globally."""
+    """Open a bounded mission with a versioned canonical contract. One active mission globally.
+
+    If the active mission is orphaned (no valid session lease), the refusal says so; retry with
+    supersede_orphan=true + supersede_reason to abandon it under the owner gate, exactly like
+    hai_close_mission(closure="abandoned"): file/ntfy delivers a one-time code, call again with
+    owner_code; touchid: on owner_approved call again with the same arguments. A mission with a
+    live lease is never superseded.
+    """
     return _json(
         get_control_plane().open_mission(
             objective=objective,
@@ -142,6 +153,10 @@ def hai_open_mission(
             non_goals=non_goals,
             constraints=constraints,
             owner=owner,
+            supersede_orphan=supersede_orphan,
+            supersede_reason=supersede_reason,
+            owner_ack=owner_ack,
+            owner_code=owner_code,
         )
     )
 
