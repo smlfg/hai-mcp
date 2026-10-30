@@ -1,0 +1,20 @@
+{
+  "name": "hai-mcp",
+  "description": "Model-agnostic MCP control plane for the Human Agent Interface (HAI): bounded missions, session leases, drift checks and owner-gated actions so agent work stays observable and recoverable. Local-first, runs via uvx from PyPI.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Samuel Fleig"
+  },
+  "homepage": "https://www.human-agent-interface.com/",
+  "repository": "https://github.com/smlfg/hai-mcp",
+  "license": "MIT",
+  "keywords": [
+    "mcp",
+    "agents",
+    "governance",
+    "human-in-the-loop",
+    "control-plane",
+    "missions"
+  ],
+  "logo": "assets/logo.svg"
+}
