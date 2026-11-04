@@ -36,6 +36,37 @@
 | `hai_proof` | terminal mission state (completed) | thin wrapper over `hai_close_mission`; verified evidence per criterion |
 | `hai_stop` | day-stop record + lease invalidation | none (does not close missions) |
 
+## Tool annotations
+
+Derived from the `Mutates` column; `openWorldHint` is `false` for every tool. `idempotent` means that repeating the same call leaves the same state.
+
+| Tool | readOnly | destructive | idempotent |
+|---|---|---|---|
+| `hai_health` | yes | no | yes |
+| `hai_status` | yes | no | yes |
+| `hai_get_next_step` | yes | no | yes |
+| `hai_read_artifacts` | yes | no | yes |
+| `hai_park` | no | no | no |
+| `hai_set_focus` | no | no | yes |
+| `hai_propose_next_step` | no | no | yes |
+| `hai_accept_next_step` | no | yes | no |
+| `hai_checkpoint` | no | no | no |
+| `hai_recover` | yes | no | yes |
+| `hai_open_mission` | no | no | no |
+| `hai_bind_project` | no | no | yes |
+| `hai_authorize_session` | no | no | no |
+| `hai_get_contract` | yes | no | yes |
+| `hai_check_activity` | no | no | no |
+| `hai_park_item` | no | no | no |
+| `hai_recontract` | no | yes | no |
+| `hai_close_mission` | no | yes | no |
+| `hai_intake` | no | no | no |
+| `hai_distill` | no | no | no |
+| `hai_mission_start` | no | no | no |
+| `hai_drift_check` | no | no | no |
+| `hai_proof` | no | yes | no |
+| `hai_stop` | no | yes | no |
+
 ## Owner gate
 
 The owner is a separate principal. Default mode `nonce`: the server delivers a one-time code through an owner channel the client cannot read (`file` or `ntfy`), or — on macOS with `HAI_OWNER_CHANNEL=touchid` — the server process itself shows a Touch ID prompt and records the approval. The client can pass a code channel only with a code a human relayed, and can pass Touch ID only by calling again after that process observed a successful biometric for the same fingerprint. `ack_legacy` keeps the old self-asserted `owner_ack`. Full contract: `docs/OWNER_GATE.md`.
