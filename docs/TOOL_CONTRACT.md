@@ -36,6 +36,37 @@
 | `hai_proof` | terminal mission state (completed) | thin wrapper over `hai_close_mission`; verified evidence per criterion |
 | `hai_stop` | day-stop record + lease invalidation | none (does not close missions) |
 
+## Tool annotations
+
+Derived from the `Mutates` column; `openWorldHint` is `false` for every tool. `idempotent` means that repeating the same call leaves the same state.
+
+| Tool | readOnly | destructive | idempotent |
+|---|---|---|---|
+| `hai_health` | yes | no | yes |
+| `hai_status` | yes | no | yes |
+| `hai_get_next_step` | yes | no | yes |
+| `hai_read_artifacts` | yes | no | yes |
+| `hai_park` | no | no | no |
+| `hai_set_focus` | no | no | yes |
+| `hai_propose_next_step` | no | no | yes |
+| `hai_accept_next_step` | no | yes | no |
+| `hai_checkpoint` | no | no | no |
+| `hai_recover` | yes | no | yes |
+| `hai_open_mission` | no | no | no |
+| `hai_bind_project` | no | no | yes |
+| `hai_authorize_session` | no | no | no |
+| `hai_get_contract` | yes | no | yes |
+| `hai_check_activity` | no | no | no |
+| `hai_park_item` | no | no | no |
+| `hai_recontract` | no | yes | no |
+| `hai_close_mission` | no | yes | no |
+| `hai_intake` | no | no | no |
+| `hai_distill` | no | no | no |
+| `hai_mission_start` | no | no | no |
+| `hai_drift_check` | no | no | no |
+| `hai_proof` | no | yes | no |
+| `hai_stop` | no | yes | no |
+
 ## Enforcement hook (`hai-guard`)
 
 Not an MCP tool: a CLI for harness hooks (`UserPromptSubmit`, `PreToolUse`). Reads the same `HAI_HOME` state, blocks with exit 2 when a prompt or tool call falls outside the active mission (cwd / `allowed_paths` / non-goals / capabilities), parks blocked prompts via intake, and audits each block as `guard_denied`. Errors block (fail-closed). Matrix and setup: `docs/client-snippets/README.md`.
