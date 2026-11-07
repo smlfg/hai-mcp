@@ -15,6 +15,7 @@ dev = [
 
 [project.scripts]
 hai-mcp = "hai_mcp.server:main"
+hai-guard = "hai_mcp.guard_cli:entry"
 
 [build-system]
 requires = ["hatchling"]

@@ -1,0 +1,25 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "HAI_HOME=$HOME/.hai HAI_DEVICE_ID=macbook uv run --directory /ABS/PATH/TO/hai-mcp hai-guard --harness claude-code"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "HAI_HOME=$HOME/.hai HAI_DEVICE_ID=macbook uv run --directory /ABS/PATH/TO/hai-mcp hai-guard --harness claude-code"
+          }
+        ]
+      }
+    ]
+  }
+}

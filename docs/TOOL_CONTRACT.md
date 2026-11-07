@@ -36,6 +36,10 @@
 | `hai_proof` | terminal mission state (completed) | thin wrapper over `hai_close_mission`; verified evidence per criterion |
 | `hai_stop` | day-stop record + lease invalidation | none (does not close missions) |
 
+## Enforcement hook (`hai-guard`)
+
+Not an MCP tool: a CLI for harness hooks (`UserPromptSubmit`, `PreToolUse`). Reads the same `HAI_HOME` state, blocks with exit 2 when a prompt or tool call falls outside the active mission (cwd / `allowed_paths` / non-goals / capabilities), parks blocked prompts via intake, and audits each block as `guard_denied`. Errors block (fail-closed). Matrix and setup: `docs/client-snippets/README.md`.
+
 ## Owner gate
 
 The owner is a separate principal. Default mode `nonce`: the server delivers a one-time code through an owner channel the client cannot read (`file` or `ntfy`), or — on macOS with `HAI_OWNER_CHANNEL=touchid` — the server process itself shows a Touch ID prompt and records the approval. The client can pass a code channel only with a code a human relayed, and can pass Touch ID only by calling again after that process observed a successful biometric for the same fingerprint. `ack_legacy` keeps the old self-asserted `owner_ack`. Full contract: `docs/OWNER_GATE.md`.
