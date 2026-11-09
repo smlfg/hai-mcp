@@ -35,6 +35,12 @@
 | `hai_drift_check` | audit only | thin wrapper over `hai_check_activity`; valid session lease |
 | `hai_proof` | terminal mission state (completed) | thin wrapper over `hai_close_mission`; verified evidence per criterion |
 | `hai_stop` | day-stop record + lease invalidation | none (does not close missions) |
+| `hai_list_missions` | no | none (read-only; `since`/`until` ISO-8601 UTC, `status`, `limit` ≤ 100) |
+| `hai_mission_timeline` | no | none (read-only; structure only unless `include_text=true`) |
+
+## Observability
+
+`hai_list_missions` and `hai_mission_timeline` are read-only views over `missions/` and the audit chain; no LLM, no writes, no gate. The timeline derives spans from event types only: *work* (`session_authorized` until blocker, lease expiry, recontract or terminal event), *blocked* (`mission_blocked` until `mission_resumed`), plus milestones (open, recontract, drift, `completion_rejected`, completed/abandoned/parked/superseded). Open missions end at "now". The result carries `stats`, a Mermaid `gantt` (`mermaid`) and a ready-to-render `markdown` block. Free text (objective, blocker reasons) appears only with `include_text=true` and is sanitised and truncated. All times are UTC; the client converts "yesterday" into a UTC range.
 
 ## Owner gate
 
@@ -77,6 +83,7 @@ Structured JSON in tool result with `ok: false` and `error` code:
 - `review_required`
 - `parallel_session_denied`
 - `device_mount_required`
+- `mission_not_found` (`hai_mission_timeline`: no such mission)
 - `owner_channel_unavailable` (owner code could not be delivered, or Touch ID could not run; gate stays closed)
 - `owner_denied` (Touch ID was cancelled, timed out, or attested a different change; gate stays closed)
 

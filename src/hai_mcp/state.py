@@ -14,6 +14,7 @@ from hai_mcp.ids import validate_intake_id
 from hai_mcp.locking import mission_state_lock
 from hai_mcp.mission import MissionEngine, _new_id, _utc_now
 from hai_mcp.projects import ProjectStore
+from hai_mcp.timeline import list_missions as _list_missions, mission_timeline as _mission_timeline
 from hai_mcp.paths import (
     PathError,
     assert_under,
@@ -610,6 +611,20 @@ class ControlPlane:
             device_id=device_id,
             owner_code=owner_code,
         )
+
+    def list_missions(
+        self,
+        since: str | None = None,
+        until: str | None = None,
+        status: str | None = None,
+        limit: Any = 20,
+    ) -> dict[str, Any]:
+        return _list_missions(self.mission, since=since, until=until, status=status, limit=limit)
+
+    def mission_timeline(self, mission_id: str, include_text: Any = False) -> dict[str, Any]:
+        if not isinstance(include_text, bool):
+            return {"ok": False, "error": "invalid_args", "message": "include_text must be a literal boolean"}
+        return _mission_timeline(self.mission, mission_id, include_text=include_text)
 
     # --- Additional daily-loop flow surface (thin, over the hardened engine) ---
 

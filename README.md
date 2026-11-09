@@ -64,6 +64,7 @@ human. Concretely, an MCP control-plane:
 | **Evidence & closure** | `hai_proof`, `hai_close_mission`, `hai_stop` |
 | **Inbox & intake** | `hai_intake`, `hai_distill`, `hai_park`, `hai_park_item` |
 | **Recovery** | `hai_checkpoint`, `hai_recover` |
+| **Observability** | `hai_list_missions`, `hai_mission_timeline` — read-only: how any past mission unfolded, as a waterfall |
 
 HAI-MCP is deliberately **not** an agent runtime. It never calls an LLM,
 never runs shell, never pushes to git, and never deletes files. It is the
@@ -73,7 +74,7 @@ judge — agents call it to ask *"may I?"* and to record *"I did"*.
 
 ## Features
 
-- **One state engine, 23 tools** — three surfaces (legacy control plane,
+- **One state engine, 26 tools** — three surfaces (legacy control plane,
   mission lifecycle, daily-loop wrappers) sharing one hardened core.
 - **Strict fail-closed boundary** — inputs are typed and rejected, not
   coerced. A `String "2"` is refused for an `Integer` field; the server
@@ -285,6 +286,45 @@ real sensor; CI mocks the helper. Detail:
 [`docs/OWNER_GATE.md`](docs/OWNER_GATE.md).
 
 ---
+
+## Example: how a mission unfolded
+
+Ask your agent *"show me yesterday's mission"*. It calls `hai_list_missions` (UTC range), then
+`hai_mission_timeline(mission_id)` and renders the returned Mermaid block. Red bars are blockers,
+diamonds are owner-approved recontracts (each creates a new contract version and revokes the old
+lease). The diagram is structure only by default; objective and blocker reasons need `include_text=true`.
+
+```mermaid
+gantt
+    title Mission M-20260914T154051 (3h 08min, 5 contract versions, completed)
+    dateFormat YYYY-MM-DD HH:mm:ss
+    axisFormat %H:%M
+    section v1
+    Mission opened :milestone, i1, 2026-09-14 13:40:51, 0s
+    Agent working :i2, 2026-09-14 13:41:02, 2026-09-14 13:44:30
+    BLOCKER :crit, i3, 2026-09-14 13:44:30, 2026-09-14 13:45:41
+    Agent working :i4, 2026-09-14 13:45:55, 2026-09-14 13:50:11
+    BLOCKER :crit, i5, 2026-09-14 13:50:11, 2026-09-14 13:51:16
+    section v2
+    Recontract v2 :milestone, i6, 2026-09-14 13:51:53, 0s
+    Agent working :i7, 2026-09-14 13:52:02, 2026-09-14 13:59:03
+    BLOCKER :crit, i8, 2026-09-14 13:59:03, 2026-09-14 14:08:40
+    section v3
+    Recontract v3 :milestone, i9, 2026-09-14 14:09:15, 0s
+    Agent working :i10, 2026-09-14 14:10:06, 2026-09-14 14:24:14
+    BLOCKER :crit, i11, 2026-09-14 14:24:14, 2026-09-14 14:54:01
+    section v4
+    Recontract v4 :milestone, i12, 2026-09-14 14:54:15, 0s
+    Agent working :i13, 2026-09-14 14:55:31, 2026-09-14 14:58:58
+    BLOCKER :crit, i14, 2026-09-14 14:58:58, 2026-09-14 15:33:25
+    section v5
+    Recontract v5 :milestone, i15, 2026-09-14 15:33:39, 0s
+    Agent working :i16, 2026-09-14 15:33:48, 2026-09-14 16:49:41
+    Mission completed :milestone, i17, 2026-09-14 16:49:41, 0s
+```
+
+The mission completed against **v5**; the original goal was never reached. HAI-MCP makes that
+scope cut visible and owner-approved, it does not judge whether the reduced goal was worth it.
 
 ## State layout
 

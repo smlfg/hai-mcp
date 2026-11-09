@@ -327,6 +327,32 @@ def hai_close_mission(
     )
 
 
+@mcp.tool()
+def hai_list_missions(
+    since: str | None = None,
+    until: str | None = None,
+    status: str | None = None,
+    limit: StrictInt = 20,
+) -> str:
+    """Read-only: list missions created between since and until (ISO-8601, UTC), newest first.
+
+    Use it to find "yesterday's mission": convert the day to UTC timestamps yourself, then
+    pass the chosen mission_id to hai_mission_timeline. Optional status filter, limit <= 100.
+    """
+    return _json(get_control_plane().list_missions(since=since, until=until, status=status, limit=limit))
+
+
+@mcp.tool()
+def hai_mission_timeline(mission_id: str, include_text: StrictBool = False) -> str:
+    """Read-only: how a mission unfolded, as stats plus a Mermaid gantt (waterfall) diagram.
+
+    Sections are contract versions, red bars are blockers, diamonds are recontracts and
+    other milestones. Structure only by default; include_text=true adds the objective and
+    blocker reasons (free text, truncated). Render the returned `markdown` for the user.
+    """
+    return _json(get_control_plane().mission_timeline(mission_id, include_text=include_text))
+
+
 # --- Additional seven flow tools (daily loop) over the canonical hardened engine ---
 
 
