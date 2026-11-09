@@ -457,6 +457,11 @@ def test_close_mission_incomplete_proof(plane: ControlPlane, project: Path) -> N
     )
     assert r["status"] == "incomplete"
     assert "dc-2" in r["missing_criteria"]
+    event = json.loads((plane.mission.audit_dir / f"{r['audit_event_id']}.json").read_text(encoding="utf-8"))
+    assert event["event_type"] == "completion_rejected"
+    assert event["mission_id"] == opened["mission_id"]
+    assert event["claimed_outcome"] == "done"
+    assert "dc-2" in event["missing_criteria"]
 
 
 def test_close_mission_path_traversal_rejected(plane: ControlPlane, project: Path) -> None:
