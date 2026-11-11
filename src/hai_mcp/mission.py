@@ -1709,12 +1709,26 @@ class MissionEngine:
             verified[cid] = meta_ev
 
         if missing or invalid:
+            # Record the claimed-but-unverified completion: the gap between
+            # what the agent claims and what the evidence proves.
+            audit = self.append_audit(
+                "completion_rejected",
+                {
+                    "mission_id": mission_id,
+                    "contract_version": version,
+                    "claimed_outcome": outcome_summary,
+                    "missing_criteria": missing,
+                    "invalid_evidence": invalid,
+                    "verified_criteria": verified,
+                },
+            )
             return {
                 "ok": True,
                 "status": "incomplete",
                 "missing_criteria": missing,
                 "invalid_evidence": invalid,
                 "verified_criteria": verified,
+                "audit_event_id": audit["event_id"],
                 "message": "completion requires verified evidence for every criterion",
             }
 

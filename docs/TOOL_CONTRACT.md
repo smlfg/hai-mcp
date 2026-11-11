@@ -28,7 +28,7 @@
 | `hai_check_activity` | audit only | valid session lease |
 | `hai_park_item` | parking record | rationale required; no execution right |
 | `hai_recontract` | new contract version + lease revocation | **owner gate**: one-time code or Touch ID, bound to the diff (`ack_legacy`: owner_ack=true); reason required; break_glass needs marker |
-| `hai_close_mission` | terminal mission state + lease revocation | completed: verified evidence per criterion; abandoned: **owner gate** (one-time code or Touch ID; `ack_legacy`: owner_ack=true) + reason |
+| `hai_close_mission` | terminal mission state + lease revocation; rejected completion: audit only (`completion_rejected`) | completed: verified evidence per criterion; abandoned: **owner gate** (one-time code or Touch ID; `ack_legacy`: owner_ack=true) + reason |
 | `hai_intake` | intake record only | none |
 | `hai_distill` | decision + next step (parks the rest) | none |
 | `hai_mission_start` | mission + contract v1 | thin wrapper over `hai_open_mission`; same gate |
