@@ -146,6 +146,29 @@ Diese Punkte legt der Umsetzende **nicht** selbst fest:
    2026-11-13 hat ein Agent ohne Freigabe Code gebaut, obwohl der Vertrag „kein
    Code" vorsah. Nicht Teil dieses Slices; hier nur als Entscheidung festgehalten.
 
+## 9a. Idee, nicht Teil dieses Slices: Beanspruchen statt Abfragen
+
+Beobachtung des Owners: Er arbeitet inzwischen an einem Thema, aber nicht mehr
+tief genug. HAI-MCP soll den Kopf des Menschen beanspruchen, ohne fordernd und
+lästig zu sein. Wie genau, ist offen. Drei Richtungen aus der Session, vom Owner
+noch nicht gewählt:
+
+1. **Im Leerlauf statt als Schranke.** Die Frage kommt, während der Agent
+   arbeitet, nicht vor dem Start. In dieser Wartezeit entstehen heute die
+   parallelen Sessions.
+2. **Als Vorhersage statt als Formular.** Vor dem Ergebnis ein Satz: „Was
+   erwartest du gleich zu sehen?" Die Abweichung zwischen Erwartung und Ergebnis
+   ist das, was hängen bleibt.
+3. **Gesprochen statt getippt.** Der Agent liest vor, was er getan hat; der Owner
+   antwortet kurz. Der Owner hat das in früheren Sessions als hilfreich
+   beschrieben.
+
+Gemeinsamer Nenner: hineinziehen statt verlangen.
+
+Offen und nicht geprüft: ob das in den Server gehört oder ins Harness (Zeitpunkt
+und Sprachausgabe kennt nur das Harness), und ob es den Fragenpool ergänzt oder
+ersetzt. Nicht bauen, bevor der Owner eine Richtung gewählt hat.
+
 ## 10. Vorschlag für den Missionsvertrag der Umsetzung
 
 - `allowed_paths`: `src/hai_mcp/`, `tests/`, `docs/TOOL_CONTRACT.md`, `GOAL.md`
