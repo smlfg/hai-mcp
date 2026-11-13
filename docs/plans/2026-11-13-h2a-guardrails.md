@@ -36,13 +36,14 @@ Tool schließt einen Posten.
 korrekt durch das Owner-Gate. Das Gate macht den Wechsel sichtbar und teuer, es
 verhindert ihn nicht, und das soll es auch nicht.
 
-**e) B010/B011 sind ungeprüft.** Die Sammlung meldet „completed ohne
-`verified.json`". Dieser Code schreibt keine `verified.json`; verifizierte
-Kriterien stehen im Audit-Event `mission_completed` (`mission.py:1741`).
-`close_mission` kann ohne Evidence pro Kriterium nicht `completed` setzen
-(`mission.py:1683-1730`). Wahrscheinlicher ist: Die Kriterien waren so
-formuliert, dass eine Datei sie erfüllt, obwohl der Live-Test fehlte. Zu prüfen
-am Audit-Event beider Missionen, bevor daraus ein Slice wird.
+**e) B010/B011 sind kein Serverfehler.** Am Audit-Event `mission_completed`
+geprüft (2026-11-13): Beide Missionen hatten Evidence pro Kriterium, kein
+`completion_rejected`. Kein Kriterium verlangte dem Wortlaut nach den Live-Test.
+Die Agenten haben die Lücke im `outcome_summary` offen benannt. Der Fehler liegt
+im Vertrag: „Tests grün" und „Statuswechsel ist möglich" lassen sich mit einer
+Datei belegen, ohne dass jemand das Ergebnis einmal echt benutzt hat. Gegenmittel
+ohne Code: Der Live-Test ist ein eigenes Kriterium, im Wortlaut „wurde einmal
+durchgeführt", nicht „ist möglich".
 
 Grenzen der Sammlung: 51 Einträge sind eine Stichprobe, die Zählungen sind keine
 Häufigkeiten. B001 und B002 sind als Fehler geführt, zeigen aber ein Gate, das
@@ -126,8 +127,7 @@ Wiedervorlage-Befund: Die Sichtbarkeit gab es also mindestens einmal.
 1. Retro-Zeitleiste → Spalte „Klasse" füllen. Fällt Muster 1 oder 5 in „bekannt,
    klappt nicht", prüfen, ob die frühere Maßnahme ebenfalls freiwillig war. Wenn
    nein, trägt die These hinter S1 nicht.
-2. B010/B011 am Audit-Event `mission_completed` prüfen: Welche Datei wurde als
-   Evidence akzeptiert?
+2. ~~B010/B011 prüfen~~ erledigt, siehe 1e.
 3. Läuft auf dem Mac dieser Code-Stand? Die `verified.json`-Dateien in B012/B013
    stammen nicht aus diesem Repo.
 4. `GOAL.md` nennt noch den Central-Core-Slice als WIP. Vor S1 umstellen.
