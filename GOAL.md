@@ -1,48 +1,50 @@
 # GOAL — HAI-MCP
 
-**Current WIP:** Slice — Lease guard for writes (`hai-guard`)
+**Current WIP:** Slice — Single-Writer Central Core (logical projects + device mounts + streamable HTTP)
 
-This is the canonical takeover document for the active slice. It does not replace `docs/TOOL_CONTRACT.md`. Background and evidence: `docs/plans/2026-11-13-h2a-guardrails.md`.
-
-Previous slice (single-writer central core: logical projects, device mounts, streamable HTTP) shipped in #5.
+This is the canonical takeover document for the active slice. It does not replace `docs/TOOL_CONTRACT.md`.
 
 ## Thesis (this slice)
 
-HAI-MCP only sees what an agent reports. A session that never calls `hai_check_activity` has no rules. The gap is not another server gate; it is a check the **harness** runs before a write, so the contract applies whether or not the agent cooperates.
+HAI-MCP remains a fail-closed **contract kernel**, not an adversarial security layer and not a semantic verifier. The gap to a distributed HAI is not another agent. It is one process that owns missions, contracts, leases, and audit events so two devices can share **commitments** without sharing local paths, cookies, or caches.
 
-HAI-MCP remains a fail-closed contract kernel, not an adversarial security layer. The guard covers file-write tools that a hook can intercept. It does not see shell commands.
+Do **not** sync `HAI_HOME` via Syncthing/Dropbox/Git. The store uses local absolute paths and `fcntl` locks; file-level mirroring would split-brain.
 
 ## In scope
 
-1. **`hai-guard` CLI.** Read-only. Exit 0 allows, exit 2 blocks, one JSON line on stdout, reason on stderr.
-2. **Governed roots only.** A path is governed when it lies under a device mount in `core/projects.json` or under the active mission's project root. Everything else is always allowed.
-3. **Inside a governed root** a write needs: an active mission whose root contains the path, at least one valid session lease, and a match against `constraints.allowed_paths`.
-4. **Hook example** for Claude Code in `docs/client-snippets/`.
+1. **One writer process.** The existing `MissionEngine` + `fcntl` lock stay the mutation authority. Streamable HTTP is an additional transport so multiple clients can talk to that process. stdio remains the default.
+2. **Logical `project_id`.** Canonical identity in the contract is `constraints.project_id`. Device-local directories live in a mount table, not as the contract’s identity.
+3. **Device + harness identity on leases.** `hai_authorize_session` records `device_id` and `harness_id` when provided. Path/evidence checks for `project_id` missions resolve through that device’s mount.
+4. **Append-only event chain.** Existing per-event audit files gain a monotonic `seq`, `prev_event_id`, and content hash, written under the mission lock.
 
 ## Out of scope (explicit)
 
-- New MCP tools, new contract fields
-- Identifying *which* session is writing (any valid lease on the active mission passes)
-- Shell-command inspection
-- Audit events from the guard (it never writes to `HAI_HOME`)
-- Context seal (branch/HEAD on the lease) and a drain for parked items: later slices, see the plan
-- LLM calls inside the server
+- Typed / semantic evidence (file existence + SHA-256 stays)
+- Authenticated owner identity or one-time approval receipts (`owner_ack=true` remains a literal boolean)
+- Knowledge graph, vector memory, chat sync
+- Merging draft PRs #1/#2/#3
 - Changing live `~/.hai` or unrelated HAI apps
+- LLM calls inside the server
+- New repository
 
 ## Compatibility
 
-No server behaviour changes. Without the hook installed nothing changes for any client.
+Existing missions that only set `constraints.project_path` keep today’s behavior. All current happy paths and owner gates stay green. `project_id` is additive.
 
 ## Acceptance
 
-In an isolated `HAI_HOME` (`tests/test_guard.py`):
+A single isolated `HAI_HOME` with two fake device roots (no copy-paste of mission JSON):
 
-1. A path outside every mount is allowed, with or without an active mission.
-2. A path in a mounted project is blocked when no mission is active, when the active mission belongs to another project, when no valid lease exists (none, expired, or from an older contract version), and when it is outside `allowed_paths`.
-3. The same path is allowed with a valid lease inside `allowed_paths`.
-4. Unreadable control-plane state blocks (fail-closed).
-5. The guard leaves `HAI_HOME` byte-identical.
+1. Open a mission on device `macbook` with `project_id` + that device’s local path.
+2. Bind device `thinkpad` to the same `project_id` (owner gate).
+3. Authorize a session as `thinkpad` / some `harness_id`.
+4. `hai_get_contract` returns the same `mission_id`, `contract_version`, `contract_hash`, and `project_id`.
+5. Activity and completion evidence resolve against the ThinkPad mount, not the MacBook path.
+6. The canonical contract does **not** treat a MacBook absolute path as identity.
+7. HTTP: two clients against one process see the same active mission; non-loopback bind without `HAI_HTTP_TOKEN` is refused.
 
-## Measure
+## Transport (fail-closed)
 
-Two weeks after the hook is installed on one harness: count of blocked writes per reason. Zero blocks means the guard is either unnecessary or not wired in.
+- Default: stdio (`uv run hai-mcp`)
+- Optional: `--transport streamable-http` (env `HAI_TRANSPORT`)
+- Default bind `127.0.0.1`. Non-loopback host requires non-empty `HAI_HTTP_TOKEN`. If a token is configured, HTTP requests must present it.

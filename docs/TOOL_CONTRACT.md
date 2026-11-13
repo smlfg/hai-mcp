@@ -36,20 +36,6 @@
 | `hai_proof` | terminal mission state (completed) | thin wrapper over `hai_close_mission`; verified evidence per criterion |
 | `hai_stop` | day-stop record + lease invalidation | none (does not close missions) |
 
-## Lease guard (CLI, not an MCP tool)
-
-`hai-guard --path <p>` or `hai-guard --hook-stdin` answers whether a write to a path is covered by the active mission. Read-only; exit 0 allows, exit 2 blocks.
-
-| Situation | Result | `reason` |
-|---|---|---|
-| path outside every mount and outside the active mission root | allow | `ungoverned` |
-| mounted project, no active mission | block | `no_active_mission` |
-| mounted project, active mission belongs to another project | block | `other_mission_active` |
-| no valid lease (none, expired, revoked, older contract version) | block | `no_valid_lease` |
-| outside `constraints.allowed_paths` | block | `path_outside_contract` |
-| control-plane state unreadable | block | `state_unreadable` |
-| valid lease, inside `allowed_paths` | allow | `in_contract` |
-
 ## Tool annotations
 
 Derived from the `Mutates` column; `openWorldHint` is `false` for every tool. `idempotent` means that repeating the same call leaves the same state.
