@@ -169,6 +169,37 @@ Offen und nicht geprüft: ob das in den Server gehört oder ins Harness (Zeitpun
 und Sprachausgabe kennt nur das Harness), und ob es den Fragenpool ergänzt oder
 ersetzt. Nicht bauen, bevor der Owner eine Richtung gewählt hat.
 
+## 9b. Einordnung des Owners: mehr als die Textdimension
+
+Der Owner versteht HAI als nächste Stufe nach CLI → TUI → GUI: eine
+Schnittstelle, in die alles einfließen kann, was zwischen Mensch und Agent
+Bedeutung trägt, nicht nur Text. Human in the loop heißt hier ausdrücklich
+nicht: Der Mensch hat ein Meta-System und schaltet dann mental ab.
+
+**Was davon schon existiert.** Das Owner-Gate per Touch ID ist eine körperliche
+Handlung in einem Kanal, den der Agent nicht bespielt. Der Owner beschreibt es
+als intentionaler als die Freigabe in jedem anderen Harness, das er benutzt hat:
+Eine Auswahl „1, 2 oder 3" liegt im selben Tippfluss wie alles andere und wird
+zum Reflex; der Finger auf dem Sensor nicht.
+
+**Verlängerung derselben Linie** (Idee des Owners, nicht Teil dieses Slices):
+
+- Sprechen: eine Plaud-Aufnahme als Absicht oder als Erklärung am Ende.
+- Zeichnen: eine reMarkable-Skizze als Bild des Ergebnisses.
+
+Ohne Code möglich: Als Beleg für ein Kriterium nimmt der Server jede Datei an
+(Existenz und Hash). Ein Transkript oder eine exportierte Seite ist eine Datei.
+Ein Kriterium wie „Owner hat in zwei Minuten gesprochen erklärt, was gebaut
+wurde" lässt sich also schon heute in einen Vertrag schreiben. Erst an einer
+echten Mission ausprobieren, dann entscheiden, ob etwas festgeschrieben wird.
+
+**Zu schützen: Die Geste wirkt, weil sie selten ist.** In drei Monaten gab es 49
+bestandene Gates. Mindestens 25 Abbrüche waren aber Aufräumen verwaister
+Missionen. Muss der Owner den Finger für Hausmeisterarbeit auflegen, wird aus
+der bewussten Entscheidung Routine, und sie verliert ihre Wirkung auch dort, wo
+es zählt. Das ist das stärkste Argument, verwaiste Missionen ohne Owner-Gate aus
+dem Slot zu nehmen (siehe `2026-11-13-h2a-guardrails.md`, Abschnitt 1b).
+
 ## 10. Vorschlag für den Missionsvertrag der Umsetzung
 
 - `allowed_paths`: `src/hai_mcp/`, `tests/`, `docs/TOOL_CONTRACT.md`, `GOAL.md`
