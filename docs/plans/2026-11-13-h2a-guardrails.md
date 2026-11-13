@@ -1,6 +1,6 @@
 # H2A-Guardrails — Plan (2026-11-13)
 
-Status: Plan, kein Code. Ersetzt weder `GOAL.md` noch `docs/TOOL_CONTRACT.md`.
+Status: S1 umgesetzt (`hai-guard`, `tests/test_guard.py`); S2 und S3 offen. Ersetzt weder `GOAL.md` noch `docs/TOOL_CONTRACT.md`.
 
 Frage: Welcher H2A-Fehler wird **wo** gestoppt, und was fehlt dafür?
 
