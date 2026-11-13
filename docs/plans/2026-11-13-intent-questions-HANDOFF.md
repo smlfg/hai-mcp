@@ -36,7 +36,20 @@ Server speichert sie strukturiert an der Mission.
 
 Der Server wählt nichts aus und deutet nichts: kein LLM im Server.
 
-## 3. Leitgröße
+## 3. Leitprinzip
+
+HAI-MCP braucht intentionale Kommunikation des Menschen. Was der Owner nicht
+ausdrücklich sagt, deutet der Agent. Der Vertrag verpflichtet deshalb beide
+Parteien: den Agenten auf Lease, Vertragstreue und Beleg; den Owner darauf, zu
+sagen, was er meint, und am Ende hinzusehen.
+
+Je besser die Agenten Lücken füllen, desto seltener muss der Owner seine Absicht
+ausformulieren, und desto seltener klärt er sie für sich selbst. HAI-MCP legt
+Reibung gezielt dorthin zurück. Reibung ist ihren Preis nur wert, wenn sie
+Aufmerksamkeit oder Fokus zurückgibt (Beispiel: der einzelne Slot), nicht wenn
+sie nur kostet (Beispiel: Code-Eingabe für eine fremde verwaiste Mission).
+
+## 3a. Leitgröße
 
 Die knappe Ressource ist die Aufmerksamkeit des Owners. Jede Entscheidung in
 diesem Slice wird daran gemessen: Kostet sie den Owner mehr, als sie zurückgibt?
@@ -128,6 +141,10 @@ Diese Punkte legt der Umsetzende **nicht** selbst fest:
    beim Schließen melden dürfen?
 5. Wo lebt der Pool: fest im Code (Änderung per Release) oder als Datei in
    `HAI_HOME` (Änderung durch den Owner)?
+6. Phasenwechsel: Soll der Übergang von Planen zu Bauen eine ausdrückliche
+   Freigabe des Owners brauchen (ein Wort wie „go", Gegenstück „halt")? Am
+   2026-11-13 hat ein Agent ohne Freigabe Code gebaut, obwohl der Vertrag „kein
+   Code" vorsah. Nicht Teil dieses Slices; hier nur als Entscheidung festgehalten.
 
 ## 10. Vorschlag für den Missionsvertrag der Umsetzung
 
