@@ -1,7 +1,8 @@
 # Handoff — Intent-Fragen beim Öffnen einer Mission (2026-11-13)
 
-Status: Anforderungen. Kein Code geschrieben. Noch kein WIP-Slice; `GOAL.md` muss
-vor Baubeginn umgestellt werden.
+Status: **Stufe 1 (Anforderung)**, Ausgang noch nicht erfüllt (siehe Abschnitt 11).
+Kein Code geschrieben. Noch kein WIP-Slice; `GOAL.md` muss vor Baubeginn
+umgestellt werden.
 
 Hintergrund: `docs/plans/2026-11-13-h2a-guardrails.md`.
 
@@ -134,13 +135,14 @@ bequemen. Das zeigt sich an Fragen, die nie gestellt werden.
 Diese Punkte legt der Umsetzende **nicht** selbst fest:
 
 1. Welche der Fragen Q1–Q7 bleiben, und was kommt auf Q10?
-2. Gehören die Antworten in den Vertrags-Hash? Wenn ja, braucht jede Änderung
-   einen Recontract mit Owner-Gate. Wenn nein, sind sie nachträglich änderbar.
-3. Eigenes Tool für den Pool oder Teil einer bestehenden Antwort?
+2. ~~Antworten im Vertrags-Hash?~~ **Entschieden 2026-11-13: ja.** Die Absicht
+   ist Teil der Zusage; eine Änderung ist ein Recontract mit Owner-Gate.
+3. ~~Eigenes Tool für den Pool?~~ **Entschieden 2026-11-13: ja**, ein lesendes
+   Tool. Die Antworten kommen als Parameter beim Öffnen mit.
 4. Token-Verbrauch: nur Budget speichern, oder soll das Harness den Ist-Wert
    beim Schließen melden dürfen?
-5. Wo lebt der Pool: fest im Code (Änderung per Release) oder als Datei in
-   `HAI_HOME` (Änderung durch den Owner)?
+5. ~~Wo lebt der Pool?~~ **Entschieden 2026-11-13: im Code.** Versioniert,
+   testbar, von keinem Agenten nebenbei änderbar. Kürzen des Pools per Release.
 6. Phasenwechsel: Soll der Übergang von Planen zu Bauen eine ausdrückliche
    Freigabe des Owners brauchen (ein Wort wie „go", Gegenstück „halt")? Am
    2026-11-13 hat ein Agent ohne Freigabe Code gebaut, obwohl der Vertrag „kein
@@ -207,3 +209,46 @@ dem Slot zu nehmen (siehe `2026-11-13-h2a-guardrails.md`, Abschnitt 1b).
 - Erstes Hinsehen des Owners: nach dem Entwurf des Tool-Schemas, vor dem Code.
 - Ein Kriterium verlangt einen echten Lauf: eine Mission mit Antworten über
   stdio geöffnet und per `hai_get_contract` zurückgelesen.
+
+## 11. Stufen
+
+Ein Handoff ist Doku, bis seine Abnahme maschinell prüfbar im Repo liegt. Absicht
+allein schützt nicht vor Drift: Der Umsetzende legt Sätze aus.
+
+| Stufe | Inhalt | Ausgang zur nächsten Stufe |
+|---|---|---|
+| 0 Idee | Prosa (hier: 9a, 9b) | Owner wählt eine Richtung |
+| 1 Anforderung | dieser Handoff | alle Owner-Entscheidungen beantwortet; Start-Commit steht fest |
+| 2 Spezifikation | Schema, rote Tests, Tripwires im Repo | „go" des Owners nach Blick aufs Schema |
+| 3 Umsetzung | Mission mit Vertrag | Tests grün, Testdatei unverändert, Budget eingehalten |
+| 4 Echter Lauf | über stdio, vom Owner angesehen | Owner schließt |
+
+Keine Stufe wird übersprungen. Der Wechsel von 2 nach 3 ist der Phasenwechsel
+von Planen zu Bauen und braucht eine ausdrückliche Freigabe.
+
+**Stand:** Stufe 1. Offen für den Ausgang: Entscheidungen 1, 4 und 6 aus
+Abschnitt 9 sowie der Start-Commit (Abschnitt 0). Entscheidungen 2, 3 und 5 sind
+getroffen und reichen für das Schema; Entscheidung 1 (endgültige Fragenliste)
+bestimmt nur den Inhalt des Pools, nicht seine Form.
+
+## 12. Tripwires für Stufe 3
+
+Jeder Punkt ist maschinell prüfbar. Sie werden in Stufe 2 angelegt, nicht erst
+während der Umsetzung.
+
+| Tripwire | Fängt |
+|---|---|
+| Start-Commit festgelegt; weicht HEAD ab, wird nicht begonnen | falscher Checkout |
+| `allowed_paths` im Vertrag (Abschnitt 10) | Arbeit außerhalb des Auftrags |
+| Abnahme (Abschnitt 7) als rote Tests, die vor dem Code im Repo liegen | Umdeuten von „fertig" |
+| Hash der Testdatei im Vertrag; fertig heißt: Tests grün **und** Datei unverändert | Tests anpassen statt Code |
+| Schema für Pool und Antworten als Datei, vom Owner freigegeben, Hash festgelegt | stilles Ändern der Schnittstelle |
+| Zahl der MCP-Tools genau eins höher als vorher; keine neue Abhängigkeit | wachsender Scope |
+| Obergrenze für geänderte Dateien und Zeilen (in Stufe 2 beziffert) | zu große Änderung |
+| Alle bestehenden Tests bleiben; keiner gelöscht oder übersprungen | „grün" durch Weglassen |
+
+Grenze: Tripwires fangen agentischen Drift (der Agent tut etwas anderes). Den
+semantischen Drift (alles grün, aber nicht gemeint) fängt nur der Blick des
+Owners. Deshalb bleiben zwei Stellen beim Owner: nach dem Schema (Ausgang
+Stufe 2) und nach dem echten Lauf (Stufe 4).
+
