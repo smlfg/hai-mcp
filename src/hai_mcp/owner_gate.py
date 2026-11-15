@@ -64,7 +64,7 @@ from hai_mcp.paths import real_path
 from hai_mcp.storage import read_json, write_json
 
 OWNER_GATE_MODES = frozenset({"nonce", "ack_legacy"})
-GATE_ACTIONS = frozenset({"accept_next_step", "recontract", "abandon_mission", "bind_worktree"})
+GATE_ACTIONS = frozenset({"accept_next_step", "recontract", "abandon_mission", "bind_worktree", "capacity_worktrees"})
 MAX_ATTEMPTS = 3
 _LIVE_CHALLENGE_STATUSES = frozenset({"pending", "approved"})
 
@@ -77,6 +77,7 @@ _NTFY_TIMEOUT_SECONDS = 5
 _TOUCHID_REASON_MAX = 360
 _APPROVAL_FIELDS = ("agent", "session", "topic")
 _ACTION_LABELS = {
+    "capacity_worktrees": "Kapazitäts-Worktrees freigeben",
     "bind_worktree": "Isolierten Worktree freigeben",
     "accept_next_step": "Nächsten Schritt übernehmen",
     "recontract": "Auftrag ändern",
@@ -181,6 +182,13 @@ def _bounded(text: str, limit: int) -> str:
 
 
 def _change_excerpt(action: str, preview: dict[str, Any]) -> str:
+    if action == "capacity_worktrees":
+        return (
+            "Projekt: "
+            + _readable_text(preview.get("project_path"))
+            + " bis "
+            + _readable_text(preview.get("expires_at"))
+        )
     if action == "bind_worktree":
         return "Schreibort: " + _readable_text(preview.get("worktree_path")) + " bis " + _readable_text(preview.get("expires_at"))
     if action == "recontract":
@@ -207,7 +215,7 @@ def build_touchid_reason(action: str, summary: str, preview: dict[str, Any], fp:
     ``summary`` and ``fp`` remain compatible arguments, never visible fallbacks.
     """
     context = normalize_approval_context(preview.get("approval_context"))
-    worktree_action = action == "bind_worktree"
+    worktree_action = action in {"bind_worktree", "capacity_worktrees"}
     agent = _display_label(context, "agent", "Agent nicht benannt", 20 if worktree_action else 40)
     session = _display_label(context, "session", "Session nicht benannt", 24 if worktree_action else 56)
     topic = _display_label(context, "topic", "Thema nicht benannt", 28 if worktree_action else 64)

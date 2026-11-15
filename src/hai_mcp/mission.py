@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import calendar
+import contextlib
 import copy
 import hashlib
 import json
@@ -15,7 +16,23 @@ from typing import Any
 from hai_mcp.boundary import strict_constraint_max_parallel, strict_int, strict_optional_time_limit_hours
 from hai_mcp.config import Config, ensure_hai_home
 from hai_mcp.capacity import capacity_window
-from hai_mcp.worktrees import binding as worktree_binding, candidate as worktree_candidate, save_binding, store_snapshot, isolation_identities, check_isolation_snapshot
+from hai_mcp.worktrees import (
+    auto_binding_body,
+    binding as worktree_binding,
+    candidate as worktree_candidate,
+    check_isolation_snapshot,
+    create_managed_worktree,
+    grant_active,
+    isolation_identities,
+    list_managed_worktrees,
+    managed_worktree_path,
+    orphan_managed_worktrees,
+    remove_managed_worktree,
+    save_binding,
+    save_grant,
+    store_snapshot,
+    worktree_commit_report,
+)
 from hai_mcp.ids import (
     IdentifierError,
     require_mission_id,
@@ -163,6 +180,14 @@ class MissionEngine:
             except PathError as exc:
                 return None, {"ok": False, "error": exc.code, "message": exc.message}
         project_path = constraints.get("project_path")
+        mission_id = contract.get("mission_id")
+        if mission_id:
+            meta = self.load_mission_meta(str(mission_id))
+            if isinstance(meta, dict) and meta.get("worktree_managed") and meta.get("worktree_path"):
+                try:
+                    return require_project_path(str(meta["worktree_path"])), None
+                except PathError as exc:
+                    return None, {"ok": False, "error": exc.code, "message": exc.message}
         if project_path:
             try:
                 return require_project_path(str(project_path)), None
@@ -219,9 +244,7 @@ class MissionEngine:
         )
 
     def bind_worktree(self, project_path: str, worktree_path: str, expires_at: str, reason: str,
-                      approval_context: dict[str, str] | None = None) -> dict[str, Any]:
-        if self.cfg.owner_gate != "nonce" or self.cfg.owner_channel != "touchid" or self.cfg.owner_touchid_fallback is not None:
-            return {"ok": False, "error": "owner_channel_unavailable", "message": "worktree binding requires native Touch ID without fallback"}
+                      approval_context: dict[str, str] | None = None, owner_code: Any = None) -> dict[str, Any]:
         try:
             body = worktree_candidate(self.cfg.hai_home, project_path, worktree_path, expires_at, reason)
             previous_store = store_snapshot(self.cfg.hai_home)
@@ -232,8 +255,8 @@ class MissionEngine:
             return {"ok": False, "error": "invalid_worktree_binding", "message": str(exc)}
         passed, result = self.owner_gate.require(action="bind_worktree", subject={"binding": body, "previous_store": previous_store},
             summary="Isolierten Worktree freigeben", preview={"project_path": project_path,
-            "worktree_path": worktree_path, "expires_at": expires_at, "reason": reason},
-            owner_code=None, approval_context=approval_context)
+            "worktree_path": worktree_path, "expires_at": expires_at, "reason": reason, "approval_context": approval_context},
+            owner_code=owner_code, approval_context=approval_context)
         if not passed:
             return result
         with mission_state_lock(self.cfg.hai_home):
@@ -248,7 +271,21 @@ class MissionEngine:
             return {"ok": True, "binding": saved, "audit_event_id": audit["event_id"]}
 
     def _root_allowed(self, root: str, window: dict[str, Any]) -> bool:
-        return bool(window["active"] and (root == window["project_path"] or worktree_binding(self.cfg.hai_home, root)))
+        if not window.get("active"):
+            return False
+        if worktree_binding(self.cfg.hai_home, root):
+            return True
+        try:
+            wt = Path(str(root))
+            if not wt.is_absolute():
+                return False
+            pp = require_project_path(str(window["project_path"]))
+            if wt.resolve() == pp.resolve():
+                return True
+            store = (pp / ".worktrees").resolve()
+            return store in wt.resolve().parents
+        except (PathError, ValueError, OSError):
+            return False
 
     def _claims_overlap(self, left: dict[str, Any], right: dict[str, Any]) -> bool:
         a, b = [Path(p) for p in left["paths"]], [Path(p) for p in right["paths"]]
@@ -267,6 +304,100 @@ class MissionEngine:
             raise ValueError("mission_recovery_required: contract has no resolvable project root")
         scopes = [assert_under(root / raw, root) for raw in contract.get("constraints", {}).get("allowed_paths", [])]
         return {"root": str(root.resolve()), "paths": [str(p) for p in scopes] or [str(root.resolve())]}
+
+    def _remap_claim_for_worktree(self, project_path: str, worktree_path: str, allowed_paths: list[str] | None) -> dict[str, Any]:
+        main = require_project_path(project_path)
+        work = Path(worktree_path)
+        if not work.is_absolute():
+            work = main / work
+        work = work.resolve()
+        store = (main / ".worktrees").resolve()
+        try:
+            work.relative_to(store)
+        except ValueError as exc:
+            raise ValueError("managed worktree path must live under .worktrees") from exc
+        scopes: list[str] = []
+        for raw in allowed_paths or []:
+            rel = Path(str(raw))
+            if rel.is_absolute():
+                raise ValueError("allowed_paths must be relative to the worktree root")
+            target = (work / rel).resolve()
+            try:
+                target.relative_to(work)
+            except ValueError as exc:
+                raise ValueError("path outside managed worktree root") from exc
+            scopes.append(str(target))
+        return {"root": str(work), "paths": scopes or [str(work)]}
+
+    def _ensure_capacity_worktree_grant(
+        self,
+        window: dict[str, Any],
+        *,
+        owner_ack: Any = False,
+        owner_code: Any = None,
+        approval_context: dict[str, str] | None = None,
+    ) -> tuple[bool, dict[str, Any]]:
+        fp = window["fingerprint"]
+        if grant_active(self.cfg.hai_home, fp):
+            return True, {"granted": True, "reused": True}
+        subject = {
+            "fingerprint": fp,
+            "project_path": window["project_path"],
+            "expires_at": window["expires_at"],
+        }
+        if self.cfg.owner_gate == "ack_legacy":
+            if owner_ack is not True:
+                return False, {
+                    "ok": False,
+                    "error": "owner_gate_required",
+                    "gate": "ack_legacy",
+                    "status": "pending_owner_confirmation",
+                    "owner_ack_required": True,
+                    "message": "capacity worktree auto-creation requires owner_ack=true (literal boolean)",
+                }
+            saved = save_grant(
+                self.cfg.hai_home,
+                fingerprint=fp,
+                project_path=window["project_path"],
+                expires_at=window["expires_at"],
+            )
+            return True, {"granted": True, "grant": saved, "gate": "ack_legacy"}
+        passed, result = self.owner_gate.require(
+            action="capacity_worktrees",
+            subject=subject,
+            summary="Capacity window worktrees freigeben",
+            preview=subject,
+            owner_code=owner_code,
+            approval_context=approval_context,
+        )
+        if not passed:
+            return False, result
+        audit = self.append_audit("capacity_worktree_grant", subject)
+        saved = save_grant(
+            self.cfg.hai_home,
+            fingerprint=fp,
+            project_path=window["project_path"],
+            expires_at=window["expires_at"],
+            audit_event_id=audit["event_id"],
+        )
+        return True, {"granted": True, "grant": saved, "owner_gate": result}
+
+    def _managed_worktree_cleanup(self, meta: dict[str, Any], *, keep_branch: bool) -> dict[str, Any] | None:
+        if not meta.get("worktree_managed") or not meta.get("worktree_path"):
+            return None
+        contract = self.current_contract(str(meta.get("mission_id")))
+        project_path = contract.get("constraints", {}).get("project_path") if isinstance(contract, dict) else None
+        if not project_path:
+            return {"removed": False, "error": "missing project_path for worktree cleanup"}
+        report: dict[str, Any] = {"worktree_path": meta["worktree_path"], "branch_kept": keep_branch}
+        try:
+            report.update(worktree_commit_report(str(project_path), str(meta["worktree_path"])))
+            remove_managed_worktree(str(project_path), str(meta["worktree_path"]), keep_branch=keep_branch)
+            report["removed"] = True
+        except (ValueError, TypeError, OSError, subprocess.SubprocessError) as exc:
+            report["removed"] = False
+            report["worktree_cleanup_error"] = str(exc)
+        return report
 
     def _mission_catalog(self) -> tuple[list[dict[str, Any]], list[str]]:
         with mission_state_lock(self.cfg.hai_home):
@@ -305,7 +436,8 @@ class MissionEngine:
                         continue
                 worktree_digest = meta.get("worktree_binding_digest")
                 if worktree_digest:
-                    registered = worktree_binding(self.cfg.hai_home, (tag or {}).get("claim", {}).get("root", ""))
+                    bind_root = meta.get("worktree_path") or (tag or {}).get("claim", {}).get("root", "")
+                    registered = worktree_binding(self.cfg.hai_home, str(bind_root))
                     if not registered or registered["digest"] != worktree_digest:
                         meta["status"] = "capacity_revoked"
                         write_json(self.mission_dir(folder.name) / "mission.json", meta)
@@ -318,7 +450,12 @@ class MissionEngine:
                         or contract.get("contract_hash") != contract_hash(contract)):
                     raise ValueError("invalid current contract")
                 try:
-                    claim = self._contract_claim(contract, (tag or {}).get("device_id") or meta.get("capacity_device_id"))
+                    if meta.get("worktree_managed"):
+                        if not isinstance(tag, dict) or not isinstance(tag.get("claim"), dict):
+                            raise ValueError("managed worktree mission missing capacity claim")
+                        claim = tag["claim"]
+                    else:
+                        claim = self._contract_claim(contract, (tag or {}).get("device_id") or meta.get("capacity_device_id"))
                 except (ValueError, PathError, OSError):
                     claim = None
                 if not is_primary:
@@ -334,6 +471,8 @@ class MissionEngine:
             try:
                 for row in rows:
                     constraints = row["contract"].get("constraints", {})
+                    if row["meta"].get("worktree_managed"):
+                        continue
                     if not constraints.get("project_id") and constraints.get("project_path") != (row["claim"] or {}).get("root"):
                         raise ValueError("mission root aliases are forbidden above two")
                 identities = isolation_identities(self.cfg.hai_home, [row["claim"]["root"] if row["claim"] else "" for row in rows])
@@ -346,7 +485,7 @@ class MissionEngine:
         prim = next((row for row in rows if row["primary"]), None)
         for row in rows:
             tag = row["meta"].get("capacity_mission")
-            if tag and prim and prim["claim"] != tag.get("primary_claim"):
+            if tag and prim and not row["primary"] and prim["claim"] != tag.get("primary_claim"):
                 errors.append(f"{row['mission_id']}: primary canonical claim changed or missing")
         for i, left in enumerate(rows):
             for right in rows[i + 1:]:
@@ -411,13 +550,48 @@ class MissionEngine:
             except (ValueError, TypeError, KeyError, OSError, subprocess.SubprocessError) as exc:
                 isolation_reason = str(exc)
             mission_limit = window["max_active_lanes"] if eligible and isolation_ready else 2
+            worktree_rows = []
+            active_roots: set[str] = set()
+            for row in rows:
+                meta = row.get("meta") or {}
+                if meta.get("worktree_managed"):
+                    entry = {
+                        "mission_id": row["mission_id"],
+                        "worktree_path": meta.get("worktree_path"),
+                        "branch": meta.get("worktree_branch"),
+                    }
+                    worktree_rows.append(entry)
+                    if meta.get("worktree_path"):
+                        active_roots.add(str(meta["worktree_path"]))
+            orphan_worktrees: list[str] = []
+            project_for_orphans = window.get("project_path") if window.get("active") else None
+            if not project_for_orphans:
+                grant_path = self.cfg.hai_home / "CAPACITY_WORKTREE_GRANT.json"
+                try:
+                    if grant_path.is_file() and not grant_path.is_symlink():
+                        grants = read_json(grant_path, {}).get("grants") or {}
+                        if isinstance(grants, dict) and grants:
+                            latest = next(iter(grants.values()))
+                            if isinstance(latest, dict):
+                                project_for_orphans = latest.get("project_path")
+                except (ValueError, TypeError, KeyError, OSError):
+                    project_for_orphans = None
+            if project_for_orphans:
+                try:
+                    orphan_worktrees = orphan_managed_worktrees(str(project_for_orphans), active_roots)
+                except (ValueError, TypeError, OSError, subprocess.SubprocessError):
+                    orphan_worktrees = []
             return {"missions": [{"mission_id": row["mission_id"], "objective": row["contract"].get("objective"),
-                                  "primary": row["primary"], "project_path": (row["claim"] or {}).get("root")}
+                                  "primary": row["primary"], "project_path": (row["claim"] or {}).get("root"),
+                                  "worktree_path": (row.get("meta") or {}).get("worktree_path"),
+                                  "worktree_branch": (row.get("meta") or {}).get("worktree_branch")}
                                  for row in rows], "active_mission_count": len(rows), "frozen_missions": frozen, "valid_writers": writers,
                     "remaining_writer_capacity": max(0, 5 - writers) if eligible else 0,
                     "remaining_mission_capacity": max(0, mission_limit - len(rows)) if eligible else 0,
                     "effective_mission_limit": mission_limit,
                     "worktree_isolation": {"eligible_above_two": isolation_ready, "reason": isolation_reason},
+                    "managed_worktrees": worktree_rows,
+                    "orphan_worktrees": orphan_worktrees,
                     "recovery_required": bool(recovery), "recovery_details": recovery}
 
     def _reject_mission_id(self, mission_id: str) -> dict[str, Any] | None:
@@ -646,8 +820,17 @@ class MissionEngine:
         approval_context: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         """Open a mission; an orphaned blocker (no valid lease) can be superseded via the abandon gate."""
-        args = dict(objective=objective, artifact=artifact, done_criteria=done_criteria,
-                    non_goals=non_goals, constraints=constraints, owner=owner)
+        args = dict(
+            objective=objective,
+            artifact=artifact,
+            done_criteria=done_criteria,
+            non_goals=non_goals,
+            constraints=constraints,
+            owner=owner,
+            owner_ack=owner_ack,
+            owner_code=owner_code,
+            approval_context=approval_context,
+        )
         result = self._open_mission_core(**args)
         if result.get("error") != "active_mission_exists" or not result.get("active_mission_id"):
             return result
@@ -701,6 +884,9 @@ class MissionEngine:
         non_goals: list[str] | None,
         constraints: dict[str, Any] | None,
         owner: str,
+        owner_ack: Any = False,
+        owner_code: Any = None,
+        approval_context: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         with mission_state_lock(self.cfg.hai_home):
             active = self.load_active_pointer()
@@ -726,16 +912,24 @@ class MissionEngine:
                 }
 
             window = capacity_window(self.cfg.hai_home)
-            secondary_tag = None
+            capacity_tag = None
+            worktree_approval = None
+            worktree_info = None
+            grant_info = None
+            claim = None
+            mission_id = _new_id("M")
             if window["active"]:
+                project_path = body["constraints"].get("project_path") or (constraints or {}).get("project_path")
+                if project_path != window["project_path"]:
+                    return {"ok": False, "error": "capacity_project_mismatch",
+                            "message": "constraints.project_path must match the active capacity window project"}
                 try:
-                    # Validate new roots before any mission or mount writes.
-                    if body["constraints"].get("project_id"):
-                        claim_root = require_project_path((constraints or {}).get("project_path"))
-                        claim = {"root": str(claim_root.resolve()), "paths": [str(assert_under(claim_root / raw, claim_root))
-                                 for raw in body["constraints"].get("allowed_paths", [])] or [str(claim_root.resolve())]}
-                    else:
-                        claim = self._contract_claim(body)
+                    wt_path = str(managed_worktree_path(window["project_path"], mission_id))
+                    claim = self._remap_claim_for_worktree(
+                        window["project_path"],
+                        wt_path,
+                        body["constraints"].get("allowed_paths"),
+                    )
                 except (ValueError, PathError, OSError, TypeError) as exc:
                     return {"ok": False, "error": "mission_recovery_required", "message": str(exc)}
             rows, errors = self._mission_catalog()
@@ -745,45 +939,66 @@ class MissionEngine:
                             "message": "only one active mission is allowed outside the capacity window"}
                 if errors or not rows or any(row["claim"] is None for row in rows):
                     return {"ok": False, "error": "mission_recovery_required", "message": "; ".join(errors) or "existing mission project binding is missing"}
+                if claim is None:
+                    return {"ok": False, "error": "mission_recovery_required", "message": "capacity claim missing"}
                 if any(not self._root_allowed(row["claim"]["root"], window) for row in rows) or not self._root_allowed(claim["root"], window):
                     return {"ok": False, "error": "capacity_project_mismatch", "message": "all concurrent missions must bind the exact capacity project"}
                 if len(rows) >= window["max_active_lanes"]:
                     return {"ok": False, "error": "max_active_missions", "message": f"{window['max_active_lanes']} active missions already admitted"}
                 if any(self._claims_overlap(claim, row["claim"]) for row in rows):
                     return {"ok": False, "error": "mission_scope_overlap", "message": "contract allowed_paths overlap another active mission"}
-                primary_row = next((row for row in rows if row["primary"]), None)
-                secondary_tag = {"fingerprint": window["fingerprint"], "expires_at": window["expires_at"],
-                                 "claim": claim, "primary_claim": primary_row["claim"] if primary_row else None,
-                                 "device_id": (constraints or {}).get("device_id")}
             elif errors:
                 return {"ok": False, "error": "mission_recovery_required", "message": "; ".join(errors)}
 
-            worktree_approval = None
-            if window["active"] and claim["root"] != window["project_path"] and (constraints or {}).get("project_path") != claim["root"]:
-                return {"ok": False, "error": "invalid_worktree_binding", "message": "worktree path aliases are forbidden"}
-            if window["active"] and claim["root"] != window["project_path"]:
-                worktree_approval = worktree_binding(self.cfg.hai_home, claim["root"])
-                if worktree_approval:
-                    if secondary_tag is None or not any(row["claim"] and row["claim"]["root"] == window["project_path"] for row in rows):
-                        return {"ok": False, "error": "canonical_peer_required", "message": "worktree admission requires an existing canonical-project mission"}
-                elif secondary_tag is not None or (Path(claim["root"]) / ".git").is_file():
-                    return {"ok": False, "error": "invalid_worktree_binding", "message": "explicit active worktree binding required"}
-
             isolation_peers = None
-            if len(rows) + 1 > 2:
+            if window["active"] and claim is not None:
+                granted, grant_info = self._ensure_capacity_worktree_grant(
+                    window, owner_ack=owner_ack, owner_code=owner_code, approval_context=approval_context
+                )
+                if not granted:
+                    return grant_info
                 try:
-                    if (constraints or {}).get("project_path") != claim["root"]:
-                        raise ValueError("new mission root must be exact and canonical above two")
-                    for row in rows:
-                        old_constraints = row["contract"].get("constraints", {})
-                        if not old_constraints.get("project_id") and old_constraints.get("project_path") != row["claim"]["root"]:
-                            raise ValueError("existing mission root aliases require explicit recovery")
-                    isolation_peers = isolation_identities(self.cfg.hai_home, [row["claim"]["root"] for row in rows] + [claim["root"]])
-                    for row in rows:
-                        check_isolation_snapshot(isolation_peers, row["meta"].get("worktree_isolation_peers"))
-                except (ValueError, TypeError, KeyError, OSError, subprocess.SubprocessError) as exc:
-                    return {"ok": False, "error": "worktree_isolation_required", "message": str(exc)}
-            mission_id = _new_id("M")
+                    worktree_info = create_managed_worktree(window["project_path"], mission_id)
+                    claim = self._remap_claim_for_worktree(
+                        window["project_path"],
+                        worktree_info["worktree_path"],
+                        body["constraints"].get("allowed_paths"),
+                    )
+                    bind_body = auto_binding_body(
+                        self.cfg.hai_home,
+                        window["project_path"],
+                        worktree_info["worktree_path"],
+                        "capacity auto worktree",
+                    )
+                    worktree_approval = save_binding(self.cfg.hai_home, bind_body)
+                except (ValueError, TypeError, OSError, subprocess.SubprocessError) as exc:
+                    if worktree_info:
+                        with contextlib.suppress(ValueError, OSError, subprocess.SubprocessError):
+                            remove_managed_worktree(
+                                window["project_path"], worktree_info["worktree_path"], keep_branch=True
+                            )
+                    return {"ok": False, "error": "invalid_worktree_binding", "message": str(exc)}
+                if len(rows) + 1 > 2:
+                    try:
+                        isolation_peers = isolation_identities(
+                            self.cfg.hai_home, [row["claim"]["root"] for row in rows] + [claim["root"]]
+                        )
+                        for row in rows:
+                            check_isolation_snapshot(isolation_peers, row["meta"].get("worktree_isolation_peers"))
+                    except (ValueError, TypeError, KeyError, OSError, subprocess.SubprocessError) as exc:
+                        with contextlib.suppress(ValueError, OSError, subprocess.SubprocessError):
+                            remove_managed_worktree(
+                                window["project_path"], worktree_info["worktree_path"], keep_branch=True
+                            )
+                        return {"ok": False, "error": "worktree_isolation_required", "message": str(exc)}
+                primary_row = next((row for row in rows if row["primary"]), None)
+                capacity_tag = {
+                    "fingerprint": window["fingerprint"],
+                    "expires_at": window["expires_at"],
+                    "claim": claim,
+                    "primary_claim": primary_row["claim"] if primary_row else claim,
+                    "device_id": (constraints or {}).get("device_id"),
+                }
             version = 1
             contract_body = {
                 "mission_id": mission_id,
@@ -819,13 +1034,22 @@ class MissionEngine:
                     "current_version": version,
                     "created_at": contract_body["created_at"],
                     "owner": owner,
-                    **({"capacity_mission": secondary_tag} if secondary_tag else {}),
+                    **({"capacity_mission": capacity_tag} if capacity_tag else {}),
                     **({"worktree_binding_digest": worktree_approval["digest"]} if worktree_approval else {}),
                     **({"worktree_isolation_peers": isolation_peers} if isolation_peers else {}),
                     **({"capacity_device_id": open_device_id} if open_device_id else {}),
+                    **(
+                        {
+                            "worktree_managed": True,
+                            "worktree_path": worktree_info["worktree_path"],
+                            "worktree_branch": worktree_info["branch"],
+                        }
+                        if worktree_info
+                        else {}
+                    ),
                 },
             )
-            if secondary_tag is None:
+            if not rows:
                 self.save_active_pointer(mission_id, "active")
 
             audit = self.append_audit(
@@ -836,7 +1060,7 @@ class MissionEngine:
                     "contract_hash": contract_body["contract_hash"],
                 },
             )
-            return {
+            result: dict[str, Any] = {
                 "ok": True,
                 "status": "active",
                 "validation": validation,
@@ -846,6 +1070,14 @@ class MissionEngine:
                 "contract": contract_body,
                 "audit_event_id": audit["event_id"],
             }
+            if worktree_info:
+                result["worktree"] = {
+                    "path": worktree_info["worktree_path"],
+                    "branch": worktree_info["branch"],
+                }
+            if grant_info and not grant_info.get("reused"):
+                result["capacity_worktree_grant"] = grant_info
+            return result
 
     def bind_project(
         self,
@@ -2051,6 +2283,7 @@ class MissionEngine:
                 write_json(self.mission_dir(mission_id) / "mission.json", meta)
                 if self.load_active_pointer().get("mission_id") == mission_id:
                     self.save_active_pointer(None, "none")
+            wt_report = self._managed_worktree_cleanup(meta, keep_branch=True)
             audit = self.append_audit(
                 "mission_abandoned",
                 {
@@ -2058,9 +2291,10 @@ class MissionEngine:
                     "reason": outcome_summary,
                     "revoked_sessions": revoked,
                     "owner_gate": gate_info,
+                    **({"worktree": wt_report} if wt_report else {}),
                 },
             )
-            return {
+            out = {
                 "ok": True,
                 "status": "abandoned",
                 "mission_id": mission_id,
@@ -2070,6 +2304,9 @@ class MissionEngine:
                 "next_mission": None,
                 "owner_gate": gate_info,
             }
+            if wt_report:
+                out["worktree"] = wt_report
+            return out
 
         if closure != "completed":
             return {"ok": False, "error": "invalid_args", "message": "closure must be completed or abandoned"}
@@ -2144,6 +2381,7 @@ class MissionEngine:
             meta["status"] = "completed"
             meta["closed_at"] = _utc_now()
             meta["outcome_summary"] = outcome_summary
+            wt_report = self._managed_worktree_cleanup(meta, keep_branch=True)
             write_json(self.mission_dir(mission_id) / "mission.json", meta)
             if self.load_active_pointer().get("mission_id") == mission_id:
                 self.save_active_pointer(None, "none")
@@ -2154,9 +2392,10 @@ class MissionEngine:
                 "verified_criteria": verified,
                 "outcome_summary": outcome_summary,
                 "revoked_sessions": revoked,
+                **({"worktree": wt_report} if wt_report else {}),
             },
         )
-        return {
+        out = {
             "ok": True,
             "status": "completed",
             "mission_id": mission_id,
@@ -2166,6 +2405,9 @@ class MissionEngine:
             "audit_event_id": audit["event_id"],
             "next_mission": None,
         }
+        if wt_report:
+            out["worktree"] = wt_report
+        return out
 
     def list_audit_ids(self) -> list[str]:
         return sorted(p.stem for p in self.audit_dir.glob("A-*.json"))

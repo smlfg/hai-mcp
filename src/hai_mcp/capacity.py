@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -12,6 +13,25 @@ PROJECT = "/Users/samuelfleig/Projects/01_WORK/Jobs_Selbständigkeit_Geldverdien
 PREZERO = "/Users/samuelfleig/Projects/01_WORK/HackathonGreenTechHeilbronn/Participants - Future City Hackathon/prezero-routing-hackathon-2026"
 # Owner-approved projects for a capacity window (exact canonical paths only).
 PROJECTS = frozenset({PROJECT, PREZERO})
+
+
+def allowed_projects() -> frozenset[str]:
+    """Hardcoded allowlist unless HAI_CAPACITY_PROJECTS overrides (OS pathsep, absolute paths)."""
+    raw = os.environ.get("HAI_CAPACITY_PROJECTS", "").strip()
+    if not raw:
+        return PROJECTS
+    paths: set[str] = set()
+    for part in raw.split(os.pathsep):
+        part = part.strip()
+        if not part:
+            continue
+        path = Path(part)
+        if not path.is_absolute():
+            raise ValueError("HAI_CAPACITY_PROJECTS entries must be absolute paths")
+        paths.add(str(path.resolve()))
+    if not paths:
+        return PROJECTS
+    return frozenset(paths)
 
 
 def capacity_window(home: Path) -> dict[str, Any]:
@@ -25,7 +45,7 @@ def capacity_window(home: Path) -> dict[str, Any]:
         for key in ("max_active_lanes", "max_codex_writers"):
             if type(policy.get(key)) is not int or not 3 <= policy[key] <= 5:
                 raise ValueError("capacity must be between three and five")
-        if policy.get("project_path") not in PROJECTS:
+        if policy.get("project_path") not in allowed_projects():
             raise ValueError("wrong project")
         stamps = []
         for key in ("starts_at", "expires_at"):

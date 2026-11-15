@@ -150,7 +150,9 @@ def hai_status(
     """Return ACTIVE lanes, focus, inbox count, and optional project next-step flags.
 
     Use this when you need current control-plane state; use hai_health instead to diagnose
-    the server or project path itself. Read-only. Returns JSON with ok and the status fields.
+    the server or project path itself. When a capacity window is active, mission_capacity lists
+    each mission's managed worktree path/branch and any orphaned trees under .worktrees/.
+    Read-only. Returns JSON with ok and the status fields.
     """
     return _json(get_control_plane().status(project_path))
 
@@ -415,11 +417,11 @@ def hai_open_mission(
     owner_approved call again with the same arguments), then opens this mission. A mission
     with a live lease is never superseded. Default: one active mission. An owner-enabled
     exact-project capacity window permits at most five missions with disjoint canonical
-    contract paths and five writers globally. Above two, every mission must use a different
-    registered Git worktree. Admitting another mission preserves the existing primary mission,
-    pointer and leases. Inspect hai_health.mission_capacity before admission and supply the
-    canonical constraints.project_path matching the policy project or an exact owner-approved
-    hai_bind_worktree binding; an unapproved worktree does not qualify for the exception.
+    contract paths and five writers globally. The server auto-creates an isolated Git worktree
+    per mission under <project>/.worktrees/<mission_id> after one owner-approved capacity
+    worktree grant for the window (do not run git worktree add yourself). hai_bind_worktree remains
+    for rare manual external trees only. Supply constraints.project_path matching the capacity
+    policy project; session write roots are the managed worktrees, not the main checkout.
     """
     return _json(
         get_control_plane().open_mission(
@@ -510,13 +512,13 @@ def hai_bind_worktree(
     ] = None,
     ctx: Context | None = None,
 ) -> str:
-    """Approve one exact registered linked worktree via native Touch ID, then repeat identically.
+    """Approve one exact registered linked worktree created outside the auto path.
 
-    Use this before admitting a capacity mission on a non-canonical worktree; use
-    hai_open_mission instead to admit missions once bindings qualify. Requires an active
-    exact-project capacity window. Explicit UTC expiry must be within one hour and no later
-    than that window. No owner_ack/code or file fallback accepted. Existing canonical-project
-    missions and leases remain unchanged.
+    Capacity-window missions normally receive server-managed worktrees from hai_open_mission
+    after a single capacity_worktrees owner grant. Use this only for an externally created
+    tree that must be bound manually. Requires an active exact-project capacity window and
+    the configured owner gate (file/nonce or Touch ID). Explicit UTC expiry must be within
+    one hour and no later than that window.
     """
     return _json(
         get_control_plane().bind_worktree(
@@ -753,8 +755,9 @@ def hai_close_mission(
     """Complete a mission with verified evidence, or abandon it under the owner gate.
 
     Use this when ending a mission; use hai_proof instead for the completed-only wrapper, or
-    hai_recontract to modify it. Completed needs verified evidence per criterion; abandoned
-    needs the owner gate and reason. Abandon: file/ntfy delivers a one-time code; call again
+    hai_recontract to modify it. Capacity managed missions remove their Git worktree on close;
+    the result may include a worktree report (branch, commits, removed). Completed needs verified
+    evidence per criterion; abandoned needs the owner gate and reason. Abandon: file/ntfy delivers a one-time code; call again
     with owner_code. touchid (macOS): when status is owner_approved, call again with the same
     arguments and no owner_code. Legacy gate: owner_ack=true. Supply approval_context with
     agent, session (readable chat title), and topic. Labels are client-provided display
