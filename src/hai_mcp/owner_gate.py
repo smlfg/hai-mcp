@@ -73,8 +73,8 @@ _CODE_ALPHABET = "23456789ABCDEFGHJKMNPQRSTUVWXYZ"
 _CODE_LEN = 8
 _NTFY_TIMEOUT_SECONDS = 5
 
-# Bound each field separately so long labels cannot hide the action or change excerpt.
-_TOUCHID_REASON_MAX = 360
+# macOS truncates long LAContext reasons; durable tokens (action id, fp) come first.
+_TOUCHID_REASON_MAX = 120
 _APPROVAL_FIELDS = ("agent", "session", "topic")
 _ACTION_LABELS = {
     "capacity_worktrees": "Kapazitäts-Worktrees freigeben",
@@ -207,21 +207,78 @@ def _change_excerpt(action: str, preview: dict[str, Any]) -> str:
     return _readable_text(preview.get(key))
 
 
-def build_touchid_reason(action: str, summary: str, preview: dict[str, Any], fp: str) -> str:
-    """Human decision text (at most 360 characters), without generated IDs/hashes.
+def _touchid_fp_prefix(fp: str) -> str:
+    return fp.removeprefix("sha256:")[:12] or "unknown"
 
-    Each label has its own display budget; the exact full normalized labels remain
-    bound internally. Missing labels are honest rather than guessed from IDs.
-    ``summary`` and ``fp`` remain compatible arguments, never visible fallbacks.
-    """
+
+def _touchid_project_name(preview: dict[str, Any]) -> str:
+    project_path = preview.get("project_path")
+    if isinstance(project_path, str) and project_path.strip():
+        return Path(project_path).name
+    if isinstance(preview.get("mission_id"), str):
+        return str(preview["mission_id"])[-8:]
+    return ""
+
+
+def _touchid_change_line(action: str, preview: dict[str, Any], summary: str) -> str:
+    excerpt = _change_excerpt(action, preview)
+    if not excerpt:
+        excerpt = _readable_text(summary)
+    if not excerpt:
+        return ""
+    if action == "recontract":
+        return f"diff: {excerpt}"
+    if action in {"bind_worktree", "capacity_worktrees"}:
+        return excerpt
+    return f"Änderung: {excerpt}"
+
+
+def _touchid_context_suffix(preview: dict[str, Any], action: str, room: int) -> str:
+    if room < 12:
+        return ""
     context = normalize_approval_context(preview.get("approval_context"))
     worktree_action = action in {"bind_worktree", "capacity_worktrees"}
-    agent = _display_label(context, "agent", "Agent nicht benannt", 20 if worktree_action else 40)
-    session = _display_label(context, "session", "Session nicht benannt", 24 if worktree_action else 56)
-    topic = _display_label(context, "topic", "Thema nicht benannt", 28 if worktree_action else 64)
+    agent_lim = 20 if worktree_action else 40
+    session_lim = 24 if worktree_action else 56
+    topic_lim = 28 if worktree_action else 64
+    pieces: list[str] = []
+    for key, fallback, limit in (
+        ("agent", "Agent nicht benannt", agent_lim),
+        ("session", "Session nicht benannt", session_lim),
+        ("topic", "Thema nicht benannt", topic_lim),
+    ):
+        label = _display_label(context, key, fallback, limit)
+        if label != fallback:
+            pieces.append(f"{key.capitalize()}: {label}" if key != "topic" else f"Thema: {label}")
+    if not pieces:
+        return ""
+    suffix = " · " + " · ".join(pieces)
+    return suffix if len(suffix) <= room else ""
+
+
+def build_touchid_reason(action: str, summary: str, preview: dict[str, Any], fp: str) -> str:
+    """Owner-facing Touch ID text (≤120 chars): machine action id, German labels, excerpt, fp.
+
+    ``summary`` fills the excerpt when the preview has no change text. The full
+    normalized approval context stays bound internally even when omitted here.
+    """
+    action_marker = f"[{action}]"
     action_label = _ACTION_LABELS.get(action, "Änderung freigeben")
-    excerpt = _change_excerpt(action, preview) if worktree_action else _bounded(_change_excerpt(action, preview) or "Änderung nicht beschrieben", 96)
-    reason = f"Agent: {agent} · Session: {session} · Thema: {topic} · Aktion: {action_label} · Änderung: {excerpt}"
+    fp_token = f"fp {_touchid_fp_prefix(fp)}"
+    tail = f" · {fp_token}"
+    head = f"{action_marker} · Aktion: {action_label}"
+    project = _touchid_project_name(preview)
+    if project:
+        head = f"{head} · {project}"
+    change = _touchid_change_line(action, preview, summary)
+    room = _TOUCHID_REASON_MAX - len(head) - len(tail)
+    body = ""
+    if change and room > 4:
+        body = f" · {_bounded(change, max(8, room - 3))}"
+    reason = head + body + tail
+    extra_room = _TOUCHID_REASON_MAX - len(reason)
+    reason += _touchid_context_suffix(preview, action, extra_room)
+    reason = _bounded(reason, _TOUCHID_REASON_MAX)
     assert len(reason) <= _TOUCHID_REASON_MAX
     return reason
 
