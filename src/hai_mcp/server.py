@@ -72,7 +72,7 @@ def _approval_context(value: dict[str, str] | None, ctx: Context | None) -> dict
 
 @mcp.tool(
     annotations=ToolAnnotations(
-        readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=True
+        readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False
     )
 )
 def hai_report_blocker(
@@ -101,9 +101,11 @@ def hai_report_blocker(
 ) -> str:
     """Autonomously report a genuine blocking HAI defect to the fixed smlfg/hai-mcp repo.
 
-    Expected gates are skipped. Submit minimal non-confidential evidence; never raw logs,
-    environment or project content. No lease or ControlPlane is required. Pending is not
-    success; retry the returned CLI command. Do not recursively report publisher failures.
+    Use this when HAI-MCP itself blocks protected work with a defect (not normal gate
+    denials or lease expiry). Expected gates are skipped. Submit minimal non-confidential
+    evidence; never raw logs, environment or project content. No lease or ControlPlane is
+    required. Pending is not success; retry the returned CLI command. Do not recursively
+    report publisher failures.
     """
     report = {"category": category, "problem": problem, "observed": observed, "expected": expected,
               "blocked_action": blocked_action, "hai_responsibility": hai_responsibility,
@@ -510,9 +512,11 @@ def hai_bind_worktree(
 ) -> str:
     """Approve one exact registered linked worktree via native Touch ID, then repeat identically.
 
-    Requires an active exact-project capacity window. Explicit UTC expiry must be within
-    one hour and no later than that window. No owner_ack/code or file fallback accepted.
-    Existing canonical-project missions and leases remain unchanged.
+    Use this before admitting a capacity mission on a non-canonical worktree; use
+    hai_open_mission instead to admit missions once bindings qualify. Requires an active
+    exact-project capacity window. Explicit UTC expiry must be within one hour and no later
+    than that window. No owner_ack/code or file fallback accepted. Existing canonical-project
+    missions and leases remain unchanged.
     """
     return _json(
         get_control_plane().bind_worktree(
