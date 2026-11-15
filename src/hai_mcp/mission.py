@@ -888,14 +888,12 @@ class MissionEngine:
         owner_code: Any = None,
         approval_context: dict[str, str] | None = None,
     ) -> dict[str, Any]:
-        with mission_state_lock(self.cfg.hai_home):
-            active = self.load_active_pointer()
-
-            body, issues, validation = self._validate_open_payload(
-                objective, artifact, done_criteria, non_goals, constraints, owner,
-                require_mount_fields=True,
-            )
-            if validation == "review_required":
+        body, issues, validation = self._validate_open_payload(
+            objective, artifact, done_criteria, non_goals, constraints, owner,
+            require_mount_fields=True,
+        )
+        if validation == "review_required":
+            with mission_state_lock(self.cfg.hai_home):
                 audit = self.append_audit(
                     "mission_open_review_required",
                     {"issues": issues, "objective": objective, "artifact": artifact},
@@ -911,7 +909,40 @@ class MissionEngine:
                     "message": "mission not opened; contract payload needs review",
                 }
 
+        window = capacity_window(self.cfg.hai_home)
+        grant_info: dict[str, Any] | None = None
+        if window.get("active"):
+            project_path = body["constraints"].get("project_path") or (constraints or {}).get("project_path")
+            if project_path != window["project_path"]:
+                return {
+                    "ok": False,
+                    "error": "capacity_project_mismatch",
+                    "message": "constraints.project_path must match the active capacity window project",
+                }
+            if not grant_active(self.cfg.hai_home, window["fingerprint"]):
+                granted, grant_result = self._ensure_capacity_worktree_grant(
+                    window,
+                    owner_ack=owner_ack,
+                    owner_code=owner_code,
+                    approval_context=approval_context,
+                )
+                if not granted:
+                    return grant_result
+                grant_info = grant_result
+            else:
+                grant_info = {"granted": True, "reused": True}
+
+        with mission_state_lock(self.cfg.hai_home):
+            active = self.load_active_pointer()
             window = capacity_window(self.cfg.hai_home)
+            if grant_info is not None and (
+                not window.get("active") or not grant_active(self.cfg.hai_home, window["fingerprint"])
+            ):
+                return {
+                    "ok": False,
+                    "error": "mission_recovery_required",
+                    "message": "capacity worktree grant ended or capacity window changed",
+                }
             capacity_tag = None
             worktree_approval = None
             worktree_info = None
@@ -952,11 +983,17 @@ class MissionEngine:
 
             isolation_peers = None
             if window["active"] and claim is not None:
-                granted, grant_info = self._ensure_capacity_worktree_grant(
-                    window, owner_ack=owner_ack, owner_code=owner_code, approval_context=approval_context
-                )
-                if not granted:
-                    return grant_info
+                project_path = body["constraints"].get("project_path") or (constraints or {}).get("project_path")
+                if (
+                    not window.get("active")
+                    or project_path != window.get("project_path")
+                    or not grant_active(self.cfg.hai_home, window["fingerprint"])
+                ):
+                    return {
+                        "ok": False,
+                        "error": "mission_recovery_required",
+                        "message": "capacity worktree grant ended or capacity window changed",
+                    }
                 try:
                     worktree_info = create_managed_worktree(window["project_path"], mission_id)
                     claim = self._remap_claim_for_worktree(
