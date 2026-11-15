@@ -151,7 +151,8 @@ def test_success_records_approval_then_follow_up_applies_once(
     assert plane.status()["pending_owner_challenges"] == 1
     assert len(calls) == 1
     reason = calls[0]["reason"]
-    assert "accept_next_step" in reason
+    assert "[accept_next_step]" in reason
+    assert "Nächsten Schritt" in reason
     assert project.name in reason
     assert "do the thing" in reason
     assert calls[0]["fingerprint"].removeprefix("sha256:")[:12] in reason
@@ -368,7 +369,7 @@ def test_recontract_and_abandon_are_bound_to_the_change(tmp_path: Path, project:
     assert first["status"] == "owner_approved" and first["channel"] == "touchid"
     assert any(item["field"] == "objective" for item in first["diff"])
     assert plane.mission.load_mission_meta(opened["mission_id"])["current_version"] == 1
-    assert "recontract" in seen[-1] and "diff:" in seen[-1] and "fp " in seen[-1]
+    assert "[recontract]" in seen[-1] and "diff:" in seen[-1] and "fp " in seen[-1]
 
     swapped = plane.recontract(**base, changes={"objective": "Wipe the archive"})
     assert swapped["status"] == "owner_approved"
@@ -389,7 +390,7 @@ def test_recontract_and_abandon_are_bound_to_the_change(tmp_path: Path, project:
     )
     parked = plane.close_mission(**abandon_args, owner_ack=True)
     assert parked["status"] == "owner_approved"
-    assert "abandon_mission" in seen[-1] and "scope no longer needed" in seen[-1]
+    assert "[abandon_mission]" in seen[-1] and "scope no longer needed" in seen[-1]
     assert plane.mission.load_mission_meta(opened["mission_id"])["status"] == "active"
     done = plane.close_mission(**abandon_args)
     assert done["ok"] is True and done["status"] == "abandoned"
@@ -597,7 +598,8 @@ def test_reason_truncates_a_long_diff() -> None:
     preview = {"diff": "x" * 500, "project_path": "/work/proj"}
     reason = og.build_touchid_reason("recontract", "a long summary", preview, "sha256:" + "cd" * 32)
     assert len(reason) <= 120
-    assert reason.startswith("recontract · proj")
+    assert "[recontract]" in reason
+    assert "proj" in reason
     assert "fp " + ("cd" * 6) in reason  # first 12 hex chars of the fingerprint
     assert "diff:" in reason
 

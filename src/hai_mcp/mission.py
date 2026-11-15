@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import calendar
+import contextlib
 import copy
 import hashlib
 import json
 import re
+import subprocess
 import time
 import uuid
 from dataclasses import dataclass
@@ -13,6 +15,24 @@ from typing import Any
 
 from hai_mcp.boundary import strict_constraint_max_parallel, strict_int, strict_optional_time_limit_hours
 from hai_mcp.config import Config, ensure_hai_home
+from hai_mcp.capacity import capacity_window
+from hai_mcp.worktrees import (
+    auto_binding_body,
+    binding as worktree_binding,
+    candidate as worktree_candidate,
+    check_isolation_snapshot,
+    create_managed_worktree,
+    grant_active,
+    isolation_identities,
+    list_managed_worktrees,
+    managed_worktree_path,
+    orphan_managed_worktrees,
+    remove_managed_worktree,
+    save_binding,
+    save_grant,
+    store_snapshot,
+    worktree_commit_report,
+)
 from hai_mcp.ids import (
     IdentifierError,
     require_mission_id,
@@ -160,6 +180,14 @@ class MissionEngine:
             except PathError as exc:
                 return None, {"ok": False, "error": exc.code, "message": exc.message}
         project_path = constraints.get("project_path")
+        mission_id = contract.get("mission_id")
+        if mission_id:
+            meta = self.load_mission_meta(str(mission_id))
+            if isinstance(meta, dict) and meta.get("worktree_managed") and meta.get("worktree_path"):
+                try:
+                    return require_project_path(str(meta["worktree_path"])), None
+                except PathError as exc:
+                    return None, {"ok": False, "error": exc.code, "message": exc.message}
         if project_path:
             try:
                 return require_project_path(str(project_path)), None
@@ -214,6 +242,357 @@ class MissionEngine:
             self.active_pointer_path,
             {"mission_id": mission_id, "status": status, "updated_at": _utc_now()},
         )
+
+    def bind_worktree(self, project_path: str, worktree_path: str, expires_at: str, reason: str,
+                      approval_context: dict[str, str] | None = None, owner_code: Any = None) -> dict[str, Any]:
+        try:
+            body = worktree_candidate(self.cfg.hai_home, project_path, worktree_path, expires_at, reason)
+            previous_store = store_snapshot(self.cfg.hai_home)
+            existing = worktree_binding(self.cfg.hai_home, worktree_path)
+            if existing and existing["body"] != body:
+                raise ValueError("an active worktree approval cannot be replaced; preserve its existing leases")
+        except (ValueError, TypeError, OSError, subprocess.SubprocessError) as exc:
+            return {"ok": False, "error": "invalid_worktree_binding", "message": str(exc)}
+        passed, result = self.owner_gate.require(action="bind_worktree", subject={"binding": body, "previous_store": previous_store},
+            summary="Isolierten Worktree freigeben", preview={"project_path": project_path,
+            "worktree_path": worktree_path, "expires_at": expires_at, "reason": reason, "approval_context": approval_context},
+            owner_code=owner_code, approval_context=approval_context)
+        if not passed:
+            return result
+        with mission_state_lock(self.cfg.hai_home):
+            try:
+                fresh = worktree_candidate(self.cfg.hai_home, project_path, worktree_path, expires_at, reason)
+                if fresh != body or store_snapshot(self.cfg.hai_home) != previous_store:
+                    raise ValueError("Git identity or capacity window changed during approval")
+                saved = save_binding(self.cfg.hai_home, body)
+            except (ValueError, TypeError, OSError, subprocess.SubprocessError) as exc:
+                return {"ok": False, "error": "invalid_worktree_binding", "message": str(exc)}
+            audit = self.append_audit("worktree_bound", {"binding_digest": saved["digest"], **body})
+            return {"ok": True, "binding": saved, "audit_event_id": audit["event_id"]}
+
+    def _root_allowed(self, root: str, window: dict[str, Any]) -> bool:
+        if not window.get("active"):
+            return False
+        if worktree_binding(self.cfg.hai_home, root):
+            return True
+        try:
+            wt = Path(str(root))
+            if not wt.is_absolute():
+                return False
+            pp = require_project_path(str(window["project_path"]))
+            if wt.resolve() == pp.resolve():
+                return True
+            store = (pp / ".worktrees").resolve()
+            return store in wt.resolve().parents
+        except (PathError, ValueError, OSError):
+            return False
+
+    def _claims_overlap(self, left: dict[str, Any], right: dict[str, Any]) -> bool:
+        a, b = [Path(p) for p in left["paths"]], [Path(p) for p in right["paths"]]
+        if self._scopes_overlap(a, b):
+            return True
+        if left["root"] != right["root"]:
+            # All admitted roots are one logical repository; compare canonical relative claims too.
+            a = [p.relative_to(Path(left["root"])) for p in a]
+            b = [p.relative_to(Path(right["root"])) for p in b]
+            return self._scopes_overlap(a, b)
+        return False
+
+    def _contract_claim(self, contract: dict[str, Any], device_id: str | None = None) -> dict[str, Any]:
+        root, err = self._resolve_project_root(contract, device_id=device_id)
+        if err or root is None:
+            raise ValueError("mission_recovery_required: contract has no resolvable project root")
+        scopes = [assert_under(root / raw, root) for raw in contract.get("constraints", {}).get("allowed_paths", [])]
+        return {"root": str(root.resolve()), "paths": [str(p) for p in scopes] or [str(root.resolve())]}
+
+    def _remap_claim_for_worktree(self, project_path: str, worktree_path: str, allowed_paths: list[str] | None) -> dict[str, Any]:
+        main = require_project_path(project_path)
+        work = Path(worktree_path)
+        if not work.is_absolute():
+            work = main / work
+        work = work.resolve()
+        store = (main / ".worktrees").resolve()
+        try:
+            work.relative_to(store)
+        except ValueError as exc:
+            raise ValueError("managed worktree path must live under .worktrees") from exc
+        scopes: list[str] = []
+        for raw in allowed_paths or []:
+            rel = Path(str(raw))
+            if rel.is_absolute():
+                raise ValueError("allowed_paths must be relative to the worktree root")
+            target = (work / rel).resolve()
+            try:
+                target.relative_to(work)
+            except ValueError as exc:
+                raise ValueError("path outside managed worktree root") from exc
+            scopes.append(str(target))
+        return {"root": str(work), "paths": scopes or [str(work)]}
+
+    def _ensure_capacity_worktree_grant(
+        self,
+        window: dict[str, Any],
+        *,
+        owner_ack: Any = False,
+        owner_code: Any = None,
+        approval_context: dict[str, str] | None = None,
+    ) -> tuple[bool, dict[str, Any]]:
+        fp = window["fingerprint"]
+        if grant_active(self.cfg.hai_home, fp):
+            return True, {"granted": True, "reused": True}
+        subject = {
+            "fingerprint": fp,
+            "project_path": window["project_path"],
+            "expires_at": window["expires_at"],
+        }
+        if self.cfg.owner_gate == "ack_legacy":
+            if owner_ack is not True:
+                return False, {
+                    "ok": False,
+                    "error": "owner_gate_required",
+                    "gate": "ack_legacy",
+                    "status": "pending_owner_confirmation",
+                    "owner_ack_required": True,
+                    "message": "capacity worktree auto-creation requires owner_ack=true (literal boolean)",
+                }
+            saved = save_grant(
+                self.cfg.hai_home,
+                fingerprint=fp,
+                project_path=window["project_path"],
+                expires_at=window["expires_at"],
+            )
+            return True, {"granted": True, "grant": saved, "gate": "ack_legacy"}
+        passed, result = self.owner_gate.require(
+            action="capacity_worktrees",
+            subject=subject,
+            summary="Capacity window worktrees freigeben",
+            preview=subject,
+            owner_code=owner_code,
+            approval_context=approval_context,
+        )
+        if not passed:
+            return False, result
+        audit = self.append_audit("capacity_worktree_grant", subject)
+        saved = save_grant(
+            self.cfg.hai_home,
+            fingerprint=fp,
+            project_path=window["project_path"],
+            expires_at=window["expires_at"],
+            audit_event_id=audit["event_id"],
+        )
+        return True, {"granted": True, "grant": saved, "owner_gate": result}
+
+    def _managed_worktree_cleanup(self, meta: dict[str, Any], *, keep_branch: bool) -> dict[str, Any] | None:
+        if not meta.get("worktree_managed") or not meta.get("worktree_path"):
+            return None
+        contract = self.current_contract(str(meta.get("mission_id")))
+        project_path = contract.get("constraints", {}).get("project_path") if isinstance(contract, dict) else None
+        if not project_path:
+            return {"removed": False, "error": "missing project_path for worktree cleanup"}
+        report: dict[str, Any] = {"worktree_path": meta["worktree_path"], "branch_kept": keep_branch}
+        try:
+            report.update(worktree_commit_report(str(project_path), str(meta["worktree_path"])))
+            remove_managed_worktree(str(project_path), str(meta["worktree_path"]), keep_branch=keep_branch)
+            report["removed"] = True
+        except (ValueError, TypeError, OSError, subprocess.SubprocessError) as exc:
+            report["removed"] = False
+            report["worktree_cleanup_error"] = str(exc)
+        return report
+
+    def _mission_catalog(self) -> tuple[list[dict[str, Any]], list[str]]:
+        with mission_state_lock(self.cfg.hai_home):
+            return self._mission_catalog_locked()
+
+    def _mission_catalog_locked(self) -> tuple[list[dict[str, Any]], list[str]]:
+        """One membership/claim view, including observed window revocation."""
+        pointer = self.load_active_pointer()
+        primary = pointer.get("mission_id") if pointer.get("status") == "active" else None
+        window = capacity_window(self.cfg.hai_home)
+        rows, errors = [], []
+        for folder in sorted(self.missions_dir.glob("M-*")):
+            if not validate_mission_id(folder.name)[0]:
+                continue
+            try:
+                if folder.is_symlink():
+                    raise ValueError("symlinked mission directory")
+                meta = self.load_mission_meta(folder.name)
+                if not isinstance(meta, dict):
+                    raise ValueError("invalid mission metadata")
+                if not meta or meta.get("status") != "active":
+                    continue
+                if meta.get("mission_id") != folder.name:
+                    raise ValueError("mission identifier mismatch")
+                tag = meta.get("capacity_mission")
+                if tag is not None and not isinstance(tag, dict):
+                    raise ValueError("invalid capacity mission tag")
+                is_primary = folder.name == primary
+                if not is_primary:
+                    if not isinstance(tag, dict):
+                        raise ValueError("unregistered active mission")
+                    if not window["active"] or tag.get("fingerprint") != window.get("fingerprint"):
+                        meta["status"] = "capacity_revoked"
+                        write_json(self.mission_dir(folder.name) / "mission.json", meta)
+                        self.revoke_all_sessions(folder.name, reason="capacity_window_ended")
+                        continue
+                worktree_digest = meta.get("worktree_binding_digest")
+                if worktree_digest:
+                    bind_root = meta.get("worktree_path") or (tag or {}).get("claim", {}).get("root", "")
+                    registered = worktree_binding(self.cfg.hai_home, str(bind_root))
+                    if not registered or registered["digest"] != worktree_digest:
+                        meta["status"] = "capacity_revoked"
+                        write_json(self.mission_dir(folder.name) / "mission.json", meta)
+                        self.revoke_all_sessions(folder.name, reason="worktree_binding_ended")
+                        continue
+                contract = self.current_contract(folder.name)
+                if (not isinstance(contract, dict) or not contract
+                        or contract.get("mission_id") != folder.name
+                        or contract.get("contract_version") != meta.get("current_version")
+                        or contract.get("contract_hash") != contract_hash(contract)):
+                    raise ValueError("invalid current contract")
+                try:
+                    if meta.get("worktree_managed"):
+                        if not isinstance(tag, dict) or not isinstance(tag.get("claim"), dict):
+                            raise ValueError("managed worktree mission missing capacity claim")
+                        claim = tag["claim"]
+                    else:
+                        claim = self._contract_claim(contract, (tag or {}).get("device_id") or meta.get("capacity_device_id"))
+                except (ValueError, PathError, OSError):
+                    claim = None
+                if not is_primary:
+                    if not claim or claim != tag.get("claim") or not self._root_allowed(claim["root"], window):
+                        raise ValueError("secondary project or canonical scope changed")
+                    if tag.get("expires_at") != window["expires_at"]:
+                        raise ValueError("secondary expiry mismatch")
+                rows.append({"mission_id": folder.name, "primary": is_primary, "meta": meta,
+                             "contract": contract, "claim": claim})
+            except (ValueError, PathError, OSError, TypeError, KeyError, AttributeError) as exc:
+                errors.append(f"{folder.name}: {exc}")
+        if len(rows) > 2:
+            try:
+                for row in rows:
+                    constraints = row["contract"].get("constraints", {})
+                    if row["meta"].get("worktree_managed"):
+                        continue
+                    if not constraints.get("project_id") and constraints.get("project_path") != (row["claim"] or {}).get("root"):
+                        raise ValueError("mission root aliases are forbidden above two")
+                identities = isolation_identities(self.cfg.hai_home, [row["claim"]["root"] if row["claim"] else "" for row in rows])
+                for row in rows:
+                    check_isolation_snapshot(identities, row["meta"].get("worktree_isolation_peers"))
+            except (ValueError, TypeError, KeyError, OSError, subprocess.SubprocessError) as exc:
+                errors.append(f"worktree isolation required above two missions: {exc}")
+        if len(rows) > 5 and any(row["meta"].get("capacity_mission") for row in rows):
+            errors.append("active capacity mission count exceeds five")
+        prim = next((row for row in rows if row["primary"]), None)
+        for row in rows:
+            tag = row["meta"].get("capacity_mission")
+            if tag and prim and not row["primary"] and prim["claim"] != tag.get("primary_claim"):
+                errors.append(f"{row['mission_id']}: primary canonical claim changed or missing")
+        for i, left in enumerate(rows):
+            for right in rows[i + 1:]:
+                if left["claim"] and right["claim"] and self._claims_overlap(left["claim"], right["claim"]):
+                    errors.append("active mission contract scopes overlap")
+        return rows, errors
+
+    def _mission_membership_error(self, mission_id: str) -> dict[str, Any] | None:
+        with mission_state_lock(self.cfg.hai_home):
+            return self._mission_membership_error_locked(mission_id)
+
+    def _mission_membership_error_locked(self, mission_id: str) -> dict[str, Any] | None:
+        pointer = self.load_active_pointer()
+        if pointer.get("status") == "active" and pointer.get("mission_id") == mission_id:
+            rows, errors = self._mission_catalog()
+            # Preserve original primary on expiry, but never permit canonical scope drift into live extras.
+            if errors:
+                return {"ok": False, "error": "mission_recovery_required", "message": "; ".join(errors)}
+            return None
+        rows, errors = self._mission_catalog()
+        if errors:
+            return {"ok": False, "error": "mission_recovery_required", "message": "; ".join(errors)}
+        if not any(row["mission_id"] == mission_id for row in rows):
+            return {"ok": False, "error": "mission_not_active", "message": "mission is outside effective capacity membership"}
+        return None
+
+    def capacity_status(self) -> dict[str, Any]:
+        with mission_state_lock(self.cfg.hai_home):
+            rows, errors = self._mission_catalog()
+            writers = 0
+            for row in rows:
+                for session in self.list_sessions(row["mission_id"]):
+                    if session.get("status") == "active" and "write" in session.get("capabilities", []):
+                        if self._session_valid(session, row["contract"], audit_expiry=False)[0]:
+                            writers += 1
+            recovery = list(errors)
+            if any(row["claim"] is None for row in rows):
+                recovery.append("active primary has no canonical project binding")
+            frozen = []
+            for folder in sorted(self.missions_dir.glob("M-*")):
+                if folder.is_symlink() or not validate_mission_id(folder.name)[0]:
+                    continue
+                try:
+                    meta = self.load_mission_meta(folder.name)
+                    if isinstance(meta, dict) and meta.get("status") == "capacity_revoked":
+                        contract = self.current_contract(folder.name)
+                        frozen.append({"mission_id": folder.name, "status": "capacity_revoked",
+                                       "objective": contract.get("objective") if isinstance(contract, dict) else None})
+                except (ValueError, PathError, OSError, TypeError, KeyError):
+                    continue
+            window = capacity_window(self.cfg.hai_home)
+            eligible = window["active"] and not recovery and all(row["claim"] and self._root_allowed(row["claim"]["root"], window) for row in rows)
+            isolation_reason = None
+            isolation_ready = False
+            try:
+                identities = isolation_identities(self.cfg.hai_home, [row["claim"]["root"] if row["claim"] else "" for row in rows])
+                for row in rows:
+                    check_isolation_snapshot(identities, row["meta"].get("worktree_isolation_peers"))
+                isolation_ready = not bool(errors)
+                if errors:
+                    isolation_reason = "; ".join(errors)
+            except (ValueError, TypeError, KeyError, OSError, subprocess.SubprocessError) as exc:
+                isolation_reason = str(exc)
+            mission_limit = window["max_active_lanes"] if eligible and isolation_ready else 2
+            worktree_rows = []
+            active_roots: set[str] = set()
+            for row in rows:
+                meta = row.get("meta") or {}
+                if meta.get("worktree_managed"):
+                    entry = {
+                        "mission_id": row["mission_id"],
+                        "worktree_path": meta.get("worktree_path"),
+                        "branch": meta.get("worktree_branch"),
+                    }
+                    worktree_rows.append(entry)
+                    if meta.get("worktree_path"):
+                        active_roots.add(str(meta["worktree_path"]))
+            orphan_worktrees: list[str] = []
+            project_for_orphans = window.get("project_path") if window.get("active") else None
+            if not project_for_orphans:
+                grant_path = self.cfg.hai_home / "CAPACITY_WORKTREE_GRANT.json"
+                try:
+                    if grant_path.is_file() and not grant_path.is_symlink():
+                        grants = read_json(grant_path, {}).get("grants") or {}
+                        if isinstance(grants, dict) and grants:
+                            latest = next(iter(grants.values()))
+                            if isinstance(latest, dict):
+                                project_for_orphans = latest.get("project_path")
+                except (ValueError, TypeError, KeyError, OSError):
+                    project_for_orphans = None
+            if project_for_orphans:
+                try:
+                    orphan_worktrees = orphan_managed_worktrees(str(project_for_orphans), active_roots)
+                except (ValueError, TypeError, OSError, subprocess.SubprocessError):
+                    orphan_worktrees = []
+            return {"missions": [{"mission_id": row["mission_id"], "objective": row["contract"].get("objective"),
+                                  "primary": row["primary"], "project_path": (row["claim"] or {}).get("root"),
+                                  "worktree_path": (row.get("meta") or {}).get("worktree_path"),
+                                  "worktree_branch": (row.get("meta") or {}).get("worktree_branch")}
+                                 for row in rows], "active_mission_count": len(rows), "frozen_missions": frozen, "valid_writers": writers,
+                    "remaining_writer_capacity": max(0, 5 - writers) if eligible else 0,
+                    "remaining_mission_capacity": max(0, mission_limit - len(rows)) if eligible else 0,
+                    "effective_mission_limit": mission_limit,
+                    "worktree_isolation": {"eligible_above_two": isolation_ready, "reason": isolation_reason},
+                    "managed_worktrees": worktree_rows,
+                    "orphan_worktrees": orphan_worktrees,
+                    "recovery_required": bool(recovery), "recovery_details": recovery}
 
     def _reject_mission_id(self, mission_id: str) -> dict[str, Any] | None:
         ok, message = validate_mission_id(mission_id)
@@ -399,6 +778,33 @@ class MissionEngine:
         status = "review_required" if issues else "validated"
         return body, issues, status
 
+    def _orphan_info(self, mission_id: str) -> dict[str, Any] | None:
+        """Describe the active mission when no session lease on it is still valid; else None."""
+        meta = self.load_mission_meta(mission_id)
+        if not meta or meta.get("status") != "active":
+            return None
+        contract = self.current_contract(mission_id)
+        sessions = self.list_sessions(mission_id)
+        for session in sessions:
+            if session.get("status") == "active" and self._session_valid(session, contract)[0]:
+                return None
+        now = _utc_now()
+        stamps = [str(meta.get("created_at") or "")]
+        for session in sessions:
+            stamps += [str(session[k]) for k in ("granted_at", "revoked_at") if session.get(k)]
+            if session.get("expires_at") and str(session["expires_at"]) < now:
+                stamps.append(str(session["expires_at"]))
+        last = max(sessions, key=lambda s: str(s.get("granted_at", "")), default={})
+        return {
+            "mission_id": mission_id,
+            "contract_version": int(meta["current_version"]),
+            "owner": meta.get("owner"),
+            "last_agent": last.get("agent_identity"),
+            "objective": str((contract or {}).get("objective", ""))[:200],
+            "session_count": len(sessions),
+            "last_activity_at": max(stamps),
+        }
+
     def open_mission(
         self,
         objective: str,
@@ -411,58 +817,83 @@ class MissionEngine:
         supersede_reason: str = "",
         owner_ack: Any = False,
         owner_code: Any = None,
+        approval_context: dict[str, str] | None = None,
     ) -> dict[str, Any]:
-        orphan: dict[str, Any] | None = None
-        with mission_state_lock(self.cfg.hai_home):
-            active = self.load_active_pointer()
-            if active.get("mission_id") and active.get("status") == "active":
-                orphan = self._orphan_info(str(active["mission_id"]))
-                if orphan is None or supersede_orphan is not True:
-                    refusal: dict[str, Any] = {
-                        "ok": False,
-                        "error": "active_mission_exists",
-                        "message": "only one active mission is allowed until close or abandon",
-                        "active_mission_id": active["mission_id"],
-                    }
-                    if orphan is not None:
-                        refusal["orphaned"] = True
-                        refusal["orphan"] = orphan
-                        refusal["next_action"] = (
-                            "no valid session lease remains on the active mission; retry with "
-                            "supersede_orphan=true and supersede_reason to abandon it (owner gate) "
-                            "and open this mission"
-                        )
-                    return refusal
-
-        if orphan is not None:
-            return self._supersede_orphan(
-                orphan,
-                objective=objective,
-                artifact=artifact,
-                done_criteria=done_criteria,
-                non_goals=non_goals,
-                constraints=constraints,
-                owner=owner,
-                supersede_reason=supersede_reason,
-                owner_ack=owner_ack,
-                owner_code=owner_code,
+        """Open a mission; an orphaned blocker (no valid lease) can be superseded via the abandon gate."""
+        args = dict(
+            objective=objective,
+            artifact=artifact,
+            done_criteria=done_criteria,
+            non_goals=non_goals,
+            constraints=constraints,
+            owner=owner,
+            owner_ack=owner_ack,
+            owner_code=owner_code,
+            approval_context=approval_context,
+        )
+        result = self._open_mission_core(**args)
+        if result.get("error") != "active_mission_exists" or not result.get("active_mission_id"):
+            return result
+        orphan = self._orphan_info(str(result["active_mission_id"]))
+        if orphan is None:
+            return result
+        if supersede_orphan is not True:
+            result["orphaned"] = True
+            result["orphan"] = orphan
+            result["next_action"] = (
+                "no valid session lease remains on the active mission; retry with "
+                "supersede_orphan=true and supersede_reason to abandon it (owner gate) and open this mission"
             )
+            return result
+        reason = str(supersede_reason or "").strip()
+        if not reason:
+            return {"ok": False, "error": "invalid_args", "orphan": orphan,
+                    "message": "supersede_reason is required to supersede an orphaned mission"}
+        # The core already validated the new payload (review_required comes before the capacity check).
+        closed = self.close_mission(
+            mission_id=orphan["mission_id"],
+            contract_version=orphan["contract_version"],
+            evidence=None,
+            outcome_summary=f"orphaned (no valid session lease); superseded: {reason}",
+            closure="abandoned",
+            owner_ack=owner_ack,
+            device_id=(constraints or {}).get("device_id"),
+            owner_code=owner_code,
+            approval_context=approval_context,
+        )
+        if not closed.get("ok"):
+            closed["orphan"] = orphan
+            return closed
+        opened = self._open_mission_core(**args)
+        opened["superseded_mission_id"] = orphan["mission_id"]
+        opened["superseded_audit_event_id"] = closed.get("audit_event_id")
+        if opened.get("ok"):
+            self.append_audit("mission_superseded", {
+                "mission_id": opened["mission_id"],
+                "superseded_mission_id": orphan["mission_id"],
+                "abandon_audit_event_id": closed.get("audit_event_id"),
+                "reason": reason,
+            })
+        return opened
 
-        with mission_state_lock(self.cfg.hai_home):
-            active = self.load_active_pointer()
-            if active.get("mission_id") and active.get("status") == "active":
-                return {
-                    "ok": False,
-                    "error": "active_mission_exists",
-                    "message": "only one active mission is allowed until close or abandon",
-                    "active_mission_id": active["mission_id"],
-                }
-
-            body, issues, validation = self._validate_open_payload(
-                objective, artifact, done_criteria, non_goals, constraints, owner,
-                require_mount_fields=True,
-            )
-            if validation == "review_required":
+    def _open_mission_core(
+        self,
+        objective: str,
+        artifact: str,
+        done_criteria: list[Any] | None,
+        non_goals: list[str] | None,
+        constraints: dict[str, Any] | None,
+        owner: str,
+        owner_ack: Any = False,
+        owner_code: Any = None,
+        approval_context: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
+        body, issues, validation = self._validate_open_payload(
+            objective, artifact, done_criteria, non_goals, constraints, owner,
+            require_mount_fields=True,
+        )
+        if validation == "review_required":
+            with mission_state_lock(self.cfg.hai_home):
                 audit = self.append_audit(
                     "mission_open_review_required",
                     {"issues": issues, "objective": objective, "artifact": artifact},
@@ -478,7 +909,133 @@ class MissionEngine:
                     "message": "mission not opened; contract payload needs review",
                 }
 
+        window = capacity_window(self.cfg.hai_home)
+        grant_info: dict[str, Any] | None = None
+        if window.get("active"):
+            project_path = body["constraints"].get("project_path") or (constraints or {}).get("project_path")
+            if project_path != window["project_path"]:
+                return {
+                    "ok": False,
+                    "error": "capacity_project_mismatch",
+                    "message": "constraints.project_path must match the active capacity window project",
+                }
+            if not grant_active(self.cfg.hai_home, window["fingerprint"]):
+                granted, grant_result = self._ensure_capacity_worktree_grant(
+                    window,
+                    owner_ack=owner_ack,
+                    owner_code=owner_code,
+                    approval_context=approval_context,
+                )
+                if not granted:
+                    return grant_result
+                grant_info = grant_result
+            else:
+                grant_info = {"granted": True, "reused": True}
+
+        with mission_state_lock(self.cfg.hai_home):
+            active = self.load_active_pointer()
+            window = capacity_window(self.cfg.hai_home)
+            if grant_info is not None and (
+                not window.get("active") or not grant_active(self.cfg.hai_home, window["fingerprint"])
+            ):
+                return {
+                    "ok": False,
+                    "error": "mission_recovery_required",
+                    "message": "capacity worktree grant ended or capacity window changed",
+                }
+            capacity_tag = None
+            worktree_approval = None
+            worktree_info = None
+            grant_info = None
+            claim = None
             mission_id = _new_id("M")
+            if window["active"]:
+                project_path = body["constraints"].get("project_path") or (constraints or {}).get("project_path")
+                if project_path != window["project_path"]:
+                    return {"ok": False, "error": "capacity_project_mismatch",
+                            "message": "constraints.project_path must match the active capacity window project"}
+                try:
+                    wt_path = str(managed_worktree_path(window["project_path"], mission_id))
+                    claim = self._remap_claim_for_worktree(
+                        window["project_path"],
+                        wt_path,
+                        body["constraints"].get("allowed_paths"),
+                    )
+                except (ValueError, PathError, OSError, TypeError) as exc:
+                    return {"ok": False, "error": "mission_recovery_required", "message": str(exc)}
+            rows, errors = self._mission_catalog()
+            if rows or active.get("status") == "active":
+                if not window["active"]:
+                    return {"ok": False, "error": "active_mission_exists", "active_mission_id": active.get("mission_id"),
+                            "message": "only one active mission is allowed outside the capacity window"}
+                if errors or not rows or any(row["claim"] is None for row in rows):
+                    return {"ok": False, "error": "mission_recovery_required", "message": "; ".join(errors) or "existing mission project binding is missing"}
+                if claim is None:
+                    return {"ok": False, "error": "mission_recovery_required", "message": "capacity claim missing"}
+                if any(not self._root_allowed(row["claim"]["root"], window) for row in rows) or not self._root_allowed(claim["root"], window):
+                    return {"ok": False, "error": "capacity_project_mismatch", "message": "all concurrent missions must bind the exact capacity project"}
+                if len(rows) >= window["max_active_lanes"]:
+                    return {"ok": False, "error": "max_active_missions", "message": f"{window['max_active_lanes']} active missions already admitted"}
+                if any(self._claims_overlap(claim, row["claim"]) for row in rows):
+                    return {"ok": False, "error": "mission_scope_overlap", "message": "contract allowed_paths overlap another active mission"}
+            elif errors:
+                return {"ok": False, "error": "mission_recovery_required", "message": "; ".join(errors)}
+
+            isolation_peers = None
+            if window["active"] and claim is not None:
+                project_path = body["constraints"].get("project_path") or (constraints or {}).get("project_path")
+                if (
+                    not window.get("active")
+                    or project_path != window.get("project_path")
+                    or not grant_active(self.cfg.hai_home, window["fingerprint"])
+                ):
+                    return {
+                        "ok": False,
+                        "error": "mission_recovery_required",
+                        "message": "capacity worktree grant ended or capacity window changed",
+                    }
+                try:
+                    worktree_info = create_managed_worktree(window["project_path"], mission_id)
+                    claim = self._remap_claim_for_worktree(
+                        window["project_path"],
+                        worktree_info["worktree_path"],
+                        body["constraints"].get("allowed_paths"),
+                    )
+                    bind_body = auto_binding_body(
+                        self.cfg.hai_home,
+                        window["project_path"],
+                        worktree_info["worktree_path"],
+                        "capacity auto worktree",
+                    )
+                    worktree_approval = save_binding(self.cfg.hai_home, bind_body)
+                except (ValueError, TypeError, OSError, subprocess.SubprocessError) as exc:
+                    if worktree_info:
+                        with contextlib.suppress(ValueError, OSError, subprocess.SubprocessError):
+                            remove_managed_worktree(
+                                window["project_path"], worktree_info["worktree_path"], keep_branch=True
+                            )
+                    return {"ok": False, "error": "invalid_worktree_binding", "message": str(exc)}
+                if len(rows) + 1 > 2:
+                    try:
+                        isolation_peers = isolation_identities(
+                            self.cfg.hai_home, [row["claim"]["root"] for row in rows] + [claim["root"]]
+                        )
+                        for row in rows:
+                            check_isolation_snapshot(isolation_peers, row["meta"].get("worktree_isolation_peers"))
+                    except (ValueError, TypeError, KeyError, OSError, subprocess.SubprocessError) as exc:
+                        with contextlib.suppress(ValueError, OSError, subprocess.SubprocessError):
+                            remove_managed_worktree(
+                                window["project_path"], worktree_info["worktree_path"], keep_branch=True
+                            )
+                        return {"ok": False, "error": "worktree_isolation_required", "message": str(exc)}
+                primary_row = next((row for row in rows if row["primary"]), None)
+                capacity_tag = {
+                    "fingerprint": window["fingerprint"],
+                    "expires_at": window["expires_at"],
+                    "claim": claim,
+                    "primary_claim": primary_row["claim"] if primary_row else claim,
+                    "device_id": (constraints or {}).get("device_id"),
+                }
             version = 1
             contract_body = {
                 "mission_id": mission_id,
@@ -514,9 +1071,23 @@ class MissionEngine:
                     "current_version": version,
                     "created_at": contract_body["created_at"],
                     "owner": owner,
+                    **({"capacity_mission": capacity_tag} if capacity_tag else {}),
+                    **({"worktree_binding_digest": worktree_approval["digest"]} if worktree_approval else {}),
+                    **({"worktree_isolation_peers": isolation_peers} if isolation_peers else {}),
+                    **({"capacity_device_id": open_device_id} if open_device_id else {}),
+                    **(
+                        {
+                            "worktree_managed": True,
+                            "worktree_path": worktree_info["worktree_path"],
+                            "worktree_branch": worktree_info["branch"],
+                        }
+                        if worktree_info
+                        else {}
+                    ),
                 },
             )
-            self.save_active_pointer(mission_id, "active")
+            if not rows:
+                self.save_active_pointer(mission_id, "active")
 
             audit = self.append_audit(
                 "mission_opened",
@@ -526,7 +1097,7 @@ class MissionEngine:
                     "contract_hash": contract_body["contract_hash"],
                 },
             )
-            return {
+            result: dict[str, Any] = {
                 "ok": True,
                 "status": "active",
                 "validation": validation,
@@ -536,104 +1107,14 @@ class MissionEngine:
                 "contract": contract_body,
                 "audit_event_id": audit["event_id"],
             }
-
-    def _orphan_info(self, mission_id: str) -> dict[str, Any] | None:
-        """Describe the active mission when no session lease on it is still valid; else None."""
-        meta = self.load_mission_meta(mission_id)
-        if not meta or meta.get("status") != "active":
-            return None
-        contract = self.current_contract(mission_id)
-        sessions = self.list_sessions(mission_id)
-        for session in sessions:
-            if session.get("status") == "active" and self._session_valid(session, contract)[0]:
-                return None
-        now = _utc_now()
-        stamps = [str(meta.get("created_at") or "")]
-        for session in sessions:
-            stamps += [str(session[k]) for k in ("granted_at", "revoked_at") if session.get(k)]
-            if session.get("expires_at") and str(session["expires_at"]) < now:
-                stamps.append(str(session["expires_at"]))
-        last = max(sessions, key=lambda s: str(s.get("granted_at", "")), default={})
-        return {
-            "mission_id": mission_id,
-            "contract_version": int(meta["current_version"]),
-            "owner": meta.get("owner"),
-            "last_agent": last.get("agent_identity"),
-            "objective": str((contract or {}).get("objective", ""))[:200],
-            "session_count": len(sessions),
-            "last_activity_at": max(stamps),
-        }
-
-    def _supersede_orphan(
-        self,
-        orphan: dict[str, Any],
-        *,
-        objective: str,
-        artifact: str,
-        done_criteria: list[Any] | None,
-        non_goals: list[str] | None,
-        constraints: dict[str, Any] | None,
-        owner: str,
-        supersede_reason: str,
-        owner_ack: Any,
-        owner_code: Any,
-    ) -> dict[str, Any]:
-        reason = str(supersede_reason or "").strip()
-        if not reason:
-            return {
-                "ok": False,
-                "error": "invalid_args",
-                "message": "supersede_reason is required to supersede an orphaned mission",
-                "orphan": orphan,
-            }
-        # Validate the new payload first: never abandon the orphan for a mission that cannot open.
-        _, issues, validation = self._validate_open_payload(
-            objective, artifact, done_criteria, non_goals, constraints, owner,
-            require_mount_fields=True,
-        )
-        if validation == "review_required":
-            return {
-                "ok": False,
-                "error": "review_required",
-                "status": "review_required",
-                "issues": issues,
-                "orphan": orphan,
-                "message": "new mission payload needs review; orphan was not superseded",
-            }
-        closed = self.close_mission(
-            mission_id=orphan["mission_id"],
-            contract_version=orphan["contract_version"],
-            evidence=None,
-            outcome_summary=f"orphaned (no valid session lease); superseded: {reason}",
-            closure="abandoned",
-            owner_ack=owner_ack,
-            device_id=(constraints or {}).get("device_id"),
-            owner_code=owner_code,
-        )
-        if not closed.get("ok"):
-            closed["orphan"] = orphan
-            return closed
-        opened = self.open_mission(
-            objective=objective,
-            artifact=artifact,
-            done_criteria=done_criteria,
-            non_goals=non_goals,
-            constraints=constraints,
-            owner=owner,
-        )
-        opened["superseded_mission_id"] = orphan["mission_id"]
-        opened["superseded_audit_event_id"] = closed.get("audit_event_id")
-        if opened.get("ok"):
-            self.append_audit(
-                "mission_superseded",
-                {
-                    "mission_id": opened["mission_id"],
-                    "superseded_mission_id": orphan["mission_id"],
-                    "abandon_audit_event_id": closed.get("audit_event_id"),
-                    "reason": reason,
-                },
-            )
-        return opened
+            if worktree_info:
+                result["worktree"] = {
+                    "path": worktree_info["worktree_path"],
+                    "branch": worktree_info["branch"],
+                }
+            if grant_info and not grant_info.get("reused"):
+                result["capacity_worktree_grant"] = grant_info
+            return result
 
     def bind_project(
         self,
@@ -695,7 +1176,12 @@ class MissionEngine:
                 "audit_event_id": audit["event_id"],
             }
 
-    def _session_valid(
+    def _session_valid(self, session: dict[str, Any], contract: dict[str, Any] | None = None,
+                       *, audit_expiry: bool = True) -> tuple[bool, str, str]:
+        with mission_state_lock(self.cfg.hai_home):
+            return self._session_valid_locked(session, contract, audit_expiry=audit_expiry)
+
+    def _session_valid_locked(
         self,
         session: dict[str, Any],
         contract: dict[str, Any] | None = None,
@@ -707,13 +1193,18 @@ class MissionEngine:
         if self._reject_session_id(session_id) or self._reject_mission_id(mission_id):
             return False, "invalid_args", "invalid session or mission identifier"
 
+        fresh_session = self.get_session(session_id)
+        if fresh_session is None:
+            return False, "invalid_args", "session record is unavailable"
+        session = fresh_session
+
         meta = self.load_mission_meta(mission_id)
         if not meta or meta.get("status") != "active":
             return False, "mission_not_active", "mission is not active"
 
-        active = self.load_active_pointer()
-        if active.get("mission_id") != mission_id or active.get("status") != "active":
-            return False, "mission_not_active", "mission is not the active mission"
+        membership_error = self._mission_membership_error(mission_id)
+        if membership_error:
+            return False, membership_error["error"], membership_error["message"]
 
         if contract is None:
             contract = self.current_contract(mission_id)
@@ -726,6 +1217,32 @@ class MissionEngine:
             return False, "contract_version_mismatch", "session contract version does not match current contract"
         if session.get("contract_hash") != contract.get("contract_hash"):
             return False, "contract_version_mismatch", "session contract hash does not match current contract"
+
+        window_id = session.get("capacity_window_fingerprint")
+        if window_id:
+            window = capacity_window(self.cfg.hai_home)
+            if not window["active"] or window["fingerprint"] != window_id:
+                session["status"] = "revoked"
+                self.save_session(session)
+                return False, "lease_revoked", "capacity window ended or changed"
+
+        if "write_paths" in session and session.get("status") == "active":
+            try:
+                root, root_err = self._resolve_project_root(contract, session=session)
+                if root_err or root is None:
+                    raise ValueError("writer root unavailable")
+                self._existing_write_scopes(root, contract, session)
+            except (ValueError, PathError, OSError, TypeError) as exc:
+                session["status"] = "revoked"
+                self.save_session(session)
+                return False, "lease_revoked", f"writer canonical scope changed: {exc}"
+
+        if meta.get("worktree_binding_digest"):
+            root, root_err = self._resolve_project_root(contract, session=session)
+            approval = worktree_binding(self.cfg.hai_home, str(root)) if root else None
+            if (root_err or not approval or approval["digest"] != meta["worktree_binding_digest"]
+                    or session.get("worktree_binding_digest") != approval["digest"]):
+                return False, "lease_revoked", "worktree approval ended or changed"
 
         expires_at = session.get("expires_at")
         if expires_at and _utc_now() > str(expires_at):
@@ -763,6 +1280,7 @@ class MissionEngine:
         criterion_ids: list[str] | None,
         device_id: str | None = None,
         harness_id: str | None = None,
+        write_paths: list[str] | None = None,
     ) -> dict[str, Any]:
         err = self._reject_mission_id(mission_id)
         if err:
@@ -806,6 +1324,10 @@ class MissionEngine:
             if not meta or meta.get("status") != "active":
                 return {"ok": False, "error": "mission_not_active", "message": f"mission not active: {mission_id}"}
 
+            membership_error = self._mission_membership_error(mission_id)
+            if membership_error:
+                return membership_error
+
             contract = self.load_contract(mission_id, version)
             if not contract:
                 return {
@@ -840,14 +1362,6 @@ class MissionEngine:
                 ok, _, _ = self._session_valid(s, contract)
                 if ok:
                     now_valid.append(s)
-            if len(now_valid) >= max_parallel:
-                return {
-                    "ok": False,
-                    "status": "denied",
-                    "error": "parallel_session_denied",
-                    "message": f"max_parallel_sessions={max_parallel} already reached",
-                    "clause": "constraints.max_parallel_sessions",
-                }
 
             duration = max(1, min(duration_raw, 24 * 60))
             granted_caps = [str(c).strip() for c in (capabilities or []) if str(c).strip()]
@@ -896,12 +1410,68 @@ class MissionEngine:
                     return {"ok": False, "status": "denied", "error": "invalid_args", "message": msg}
                 lease_harness_id = str(harness_id)
 
+            effective_caps = granted_caps or sorted(allowed_caps)
+            secondary = bool(meta.get("capacity_mission"))
+            if secondary and (lease_harness_id != "codex" or "write" not in effective_caps or not write_paths):
+                return {"ok": False, "error": "parallel_session_denied", "message": "secondary missions require scoped Codex writer leases"}
+            window = capacity_window(self.cfg.hai_home)
+            root, root_err = self._resolve_project_root(contract, device_id=lease_device_id)
+            scoped_paths = None
+            if write_paths is not None:
+                try:
+                    scoped_paths = self._write_scopes(root, contract, write_paths)
+                except (PathError, ValueError, TypeError, OSError) as exc:
+                    return {"ok": False, "error": "invalid_args", "message": str(exc)}
+            if window["active"] and root and self._root_allowed(str(root.resolve()), window) and "write" in effective_caps:
+                rows, errors = self._mission_catalog()
+                if errors:
+                    return {"ok": False, "error": "mission_recovery_required", "message": "; ".join(errors)}
+                global_writers = sum(1 for row in rows for other in self.list_sessions(row["mission_id"])
+                                     if other.get("status") == "active" and "write" in other.get("capabilities", [])
+                                     and self._session_valid(other, row["contract"])[0])
+                if global_writers >= 5:
+                    return {"ok": False, "error": "parallel_session_denied", "message": "five global writer limit reached"}
+            uses_window = bool(window["active"] and root and self._root_allowed(str(root.resolve()), window)
+                               and lease_harness_id == "codex" and "write" in effective_caps and scoped_paths)
+            if len(now_valid) >= max_parallel and not uses_window:
+                return {"ok": False, "error": "parallel_session_denied",
+                        "message": f"max_parallel_sessions={max_parallel} already reached"}
+            if uses_window:
+                rows, errors = self._mission_catalog()
+                if errors or any(row["claim"] is None for row in rows):
+                    return {"ok": False, "error": "mission_recovery_required", "message": "; ".join(errors) or "unknown writer root"}
+                writers = []
+                for row in rows:
+                    for other in self.list_sessions(row["mission_id"]):
+                        if other.get("status") == "active" and "write" in other.get("capabilities", []) and self._session_valid(other, row["contract"])[0]:
+                            writers.append((other, row["contract"]))
+                if len(writers) >= 5:
+                    return {"ok": False, "error": "parallel_session_denied", "message": "five writer limit reached"}
+                for existing, other_contract in writers:
+                    other_root, other_err = self._resolve_project_root(other_contract, session=existing)
+                    try:
+                        if other_err or other_root is None:
+                            raise ValueError("cannot establish existing writer scope")
+                        other_scopes = self._existing_write_scopes(other_root, other_contract, existing)
+                        if self._claims_overlap({"root": str(root.resolve()), "paths": [str(p) for p in scoped_paths]},
+                                                {"root": str(other_root.resolve()), "paths": [str(p) for p in other_scopes]}):
+                            raise ValueError("write_paths overlap an active writer")
+                    except (PathError, ValueError, TypeError, OSError) as exc:
+                        return {"ok": False, "error": "parallel_session_denied", "message": str(exc)}
+            elif "write" in effective_caps and any(
+                    other.get("capacity_window_fingerprint") and other.get("status") == "active"
+                    for row in self._mission_catalog()[0] for other in self.list_sessions(row["mission_id"])):
+                # Baseline writers cannot bypass the window's ownership check.
+                return {"ok": False, "error": "parallel_session_denied", "message": "active capacity writers require scoped Codex leases"}
+
             session_id = _new_id("S")
             granted_at = _utc_now()
             expires_at = time.strftime(
                 "%Y-%m-%dT%H:%M:%SZ",
                 time.gmtime(time.time() + duration * 60),
             )
+            if uses_window:
+                expires_at = min(expires_at, window["expires_at"])
             lease = {
                 "session_id": session_id,
                 "mission_id": mission_id,
@@ -917,6 +1487,17 @@ class MissionEngine:
                 "expires_at": expires_at,
                 "status": "active",
             }
+            if scoped_paths is not None:
+                lease["write_paths"] = write_paths
+                lease["resolved_write_paths"] = [str(p) for p in scoped_paths]
+            if uses_window:
+                lease["capacity_window_fingerprint"] = window["fingerprint"]
+            if meta.get("worktree_binding_digest"):
+                approval = worktree_binding(self.cfg.hai_home, str(root.resolve()))
+                if not approval or approval["digest"] != meta["worktree_binding_digest"]:
+                    return {"ok": False, "error": "invalid_worktree_binding", "message": "worktree approval changed"}
+                lease["worktree_binding_digest"] = approval["digest"]
+                lease["expires_at"] = min(lease["expires_at"], approval["body"]["expires_at"])
             if lease_device_id:
                 lease["device_id"] = lease_device_id
             if lease_harness_id:
@@ -1018,6 +1599,35 @@ class MissionEngine:
                 return ng
         return None
 
+    @staticmethod
+    def _scopes_overlap(left: list[Path], right: list[Path]) -> bool:
+        return any(a == b or a in b.parents or b in a.parents for a in left for b in right)
+
+    def _write_scopes(self, root: Path | None, contract: dict[str, Any], paths: list[str]) -> list[Path]:
+        if root is None or not isinstance(paths, list) or not paths:
+            raise ValueError("nonempty relative write_paths required")
+        scopes = []
+        for raw in paths:
+            if not isinstance(raw, str) or not raw.strip() or "\x00" in raw:
+                raise ValueError("invalid write scope")
+            path = Path(raw)
+            if path.is_absolute() or ".." in path.parts or path == Path(".") or raw.startswith("~"):
+                raise ValueError("write scopes must be safe relative subpaths")
+            resolved = assert_relative_allowed(root / path, root, contract.get("constraints", {}).get("allowed_paths", []))
+            if resolved == root.resolve():
+                raise ValueError("root write scope forbidden")
+            scopes.append(resolved)
+        return scopes
+
+    def _existing_write_scopes(self, root: Path, contract: dict[str, Any], session: dict[str, Any]) -> list[Path]:
+        if "write_paths" in session:
+            scopes = self._write_scopes(root, contract, session["write_paths"])
+            if [str(p) for p in scopes] != session.get("resolved_write_paths"):
+                raise ValueError("existing writer scope changed")
+            return scopes
+        allowed = contract.get("constraints", {}).get("allowed_paths", [])
+        return [assert_under(root / p, root) for p in allowed] if allowed else [root.resolve()]
+
     def _path_allowed(
         self,
         contract: dict[str, Any],
@@ -1113,6 +1723,21 @@ class MissionEngine:
             if not allowed:
                 path_violation = (err_msg or f"path outside allowed scope: {raw}", "constraints.allowed_paths")
                 break
+
+        if "write_paths" in session:
+            try:
+                root, root_err = self._resolve_project_root(contract, session=session)
+                if root_err or root is None:
+                    raise ValueError("writer project unavailable")
+                scopes = self._existing_write_scopes(root, contract, session)
+                if not affected_paths:
+                    raise ValueError("scoped writer must declare affected_paths")
+                for raw in affected_paths:
+                    path = assert_under(root / raw, root)
+                    if not any(path == scope or scope in path.parents for scope in scopes):
+                        raise ValueError("activity exceeds session.write_paths")
+            except (PathError, ValueError, TypeError, OSError) as exc:
+                path_violation = (str(exc), "session.write_paths")
 
         cap_violation: tuple[str, str] | None = None
         if path_violation is None:
@@ -1357,6 +1982,7 @@ class MissionEngine:
         owner_ack: Any = False,
         break_glass_marker: Any = False,
         owner_code: Any = None,
+        approval_context: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         err = self._reject_mission_id(mission_id)
         if err:
@@ -1390,6 +2016,10 @@ class MissionEngine:
                 "current_version": meta["current_version"],
             }
 
+        membership_error = self._mission_membership_error(mission_id)
+        if membership_error:
+            return membership_error
+
         old_contract = self.load_contract(mission_id, version)
         if not old_contract:
             return {"ok": False, "error": "contract_version_mismatch", "message": "contract not found"}
@@ -1420,10 +2050,11 @@ class MissionEngine:
         else:
             passed, gate_result = self.owner_gate.require(
                 action="recontract",
-                subject={"mission_id": mission_id, "contract_version": version, "mode": mode, "diff": diff},
+                subject={"mission_id": mission_id, "contract_version": version, "mode": mode, "diff": diff, "reason": reason},
                 summary=f"Recontract mission {mission_id} v{version} -> v{version + 1} ({mode})",
                 preview={"mission_id": mission_id, "mode": mode, "reason": reason, "diff": diff},
                 owner_code=owner_code,
+                approval_context=approval_context,
             )
             if not passed:
                 gate_result["diff"] = diff
@@ -1451,6 +2082,24 @@ class MissionEngine:
                     "current_version": meta["current_version"],
                 }
 
+            membership_error = self._mission_membership_error(mission_id)
+            if membership_error:
+                return membership_error
+            rows, errors = self._mission_catalog()
+            if len(rows) > 1 or meta.get("capacity_mission"):
+                try:
+                    candidate_claim = self._contract_claim(candidate, (meta.get("capacity_mission") or {}).get("device_id"))
+                    window = capacity_window(self.cfg.hai_home)
+                    if not window["active"] or errors or not self._root_allowed(candidate_claim["root"], window):
+                        raise ValueError("capacity membership or project changed")
+                    for row in rows:
+                        if row["mission_id"] != mission_id and (not row["claim"] or self._claims_overlap(candidate_claim, row["claim"])):
+                            raise ValueError("recontract scope overlaps another active mission")
+                except (ValueError, PathError, OSError, TypeError) as exc:
+                    return {"ok": False, "error": "mission_scope_overlap", "message": str(exc)}
+            else:
+                candidate_claim = None
+
             revoked = self.revoke_all_sessions(mission_id, reason="recontract")
 
             new_version = int(meta["current_version"]) + 1
@@ -1464,6 +2113,13 @@ class MissionEngine:
             new_contract["contract_hash"] = contract_hash(new_contract)
 
             write_json(self.contract_path(mission_id, new_version), new_contract)
+            if meta.get("capacity_mission") and candidate_claim:
+                meta["capacity_mission"]["claim"] = candidate_claim
+            if candidate_claim and self.load_active_pointer().get("mission_id") == mission_id:
+                for row in rows:
+                    if row["meta"].get("capacity_mission"):
+                        row["meta"]["capacity_mission"]["primary_claim"] = candidate_claim
+                        write_json(self.mission_dir(row["mission_id"]) / "mission.json", row["meta"])
             meta["current_version"] = new_version
             write_json(self.mission_dir(mission_id) / "mission.json", meta)
 
@@ -1567,6 +2223,7 @@ class MissionEngine:
         owner_ack: Any = False,
         device_id: str | None = None,
         owner_code: Any = None,
+        approval_context: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         err = self._reject_mission_id(mission_id)
         if err:
@@ -1591,6 +2248,10 @@ class MissionEngine:
                 "message": "stale contract version",
                 "current_version": meta["current_version"],
             }
+
+        membership_error = self._mission_membership_error(mission_id)
+        if membership_error:
+            return membership_error
 
         contract = self.load_contract(mission_id, version)
         if not contract:
@@ -1631,7 +2292,7 @@ class MissionEngine:
                     return {"ok": False, "error": "invalid_args", "message": "abandon reason required in outcome_summary"}
                 passed, gate_result = self.owner_gate.require(
                     action="abandon_mission",
-                    subject={"mission_id": mission_id, "contract_version": version, "closure": "abandoned"},
+                    subject={"mission_id": mission_id, "contract_version": version, "closure": "abandoned", "outcome_summary": outcome_summary},
                     summary=f"Abandon mission {mission_id} (contract v{version})",
                     preview={
                         "mission_id": mission_id,
@@ -1639,18 +2300,27 @@ class MissionEngine:
                         "abandon_reason": outcome_summary[:200],
                     },
                     owner_code=owner_code,
+                    approval_context=approval_context,
                 )
                 if not passed:
                     return gate_result
                 gate_info = gate_result
             with mission_state_lock(self.cfg.hai_home):
+                fresh = self.load_mission_meta(mission_id)
+                if not fresh or fresh.get("status") != "active" or int(fresh.get("current_version", -1)) != version:
+                    return {"ok": False, "error": "contract_version_mismatch", "message": "mission changed during close"}
+                membership_error = self._mission_membership_error(mission_id)
+                if membership_error:
+                    return membership_error
                 revoked = self.revoke_all_sessions(mission_id, reason="abandoned")
                 meta = self.load_mission_meta(mission_id) or meta
                 meta["status"] = "abandoned"
                 meta["closed_at"] = _utc_now()
                 meta["abandon_reason"] = outcome_summary
                 write_json(self.mission_dir(mission_id) / "mission.json", meta)
-                self.save_active_pointer(None, "none")
+                if self.load_active_pointer().get("mission_id") == mission_id:
+                    self.save_active_pointer(None, "none")
+            wt_report = self._managed_worktree_cleanup(meta, keep_branch=True)
             audit = self.append_audit(
                 "mission_abandoned",
                 {
@@ -1658,9 +2328,10 @@ class MissionEngine:
                     "reason": outcome_summary,
                     "revoked_sessions": revoked,
                     "owner_gate": gate_info,
+                    **({"worktree": wt_report} if wt_report else {}),
                 },
             )
-            return {
+            out = {
                 "ok": True,
                 "status": "abandoned",
                 "mission_id": mission_id,
@@ -1670,6 +2341,9 @@ class MissionEngine:
                 "next_mission": None,
                 "owner_gate": gate_info,
             }
+            if wt_report:
+                out["worktree"] = wt_report
+            return out
 
         if closure != "completed":
             return {"ok": False, "error": "invalid_args", "message": "closure must be completed or abandoned"}
@@ -1733,13 +2407,21 @@ class MissionEngine:
             }
 
         with mission_state_lock(self.cfg.hai_home):
+            fresh = self.load_mission_meta(mission_id)
+            if not fresh or fresh.get("status") != "active" or int(fresh.get("current_version", -1)) != version:
+                return {"ok": False, "error": "contract_version_mismatch", "message": "mission changed during close"}
+            membership_error = self._mission_membership_error(mission_id)
+            if membership_error:
+                return membership_error
             revoked = self.revoke_all_sessions(mission_id, reason="completed")
             meta = self.load_mission_meta(mission_id) or meta
             meta["status"] = "completed"
             meta["closed_at"] = _utc_now()
             meta["outcome_summary"] = outcome_summary
+            wt_report = self._managed_worktree_cleanup(meta, keep_branch=True)
             write_json(self.mission_dir(mission_id) / "mission.json", meta)
-            self.save_active_pointer(None, "none")
+            if self.load_active_pointer().get("mission_id") == mission_id:
+                self.save_active_pointer(None, "none")
         audit = self.append_audit(
             "mission_completed",
             {
@@ -1747,9 +2429,10 @@ class MissionEngine:
                 "verified_criteria": verified,
                 "outcome_summary": outcome_summary,
                 "revoked_sessions": revoked,
+                **({"worktree": wt_report} if wt_report else {}),
             },
         )
-        return {
+        out = {
             "ok": True,
             "status": "completed",
             "mission_id": mission_id,
@@ -1759,6 +2442,9 @@ class MissionEngine:
             "audit_event_id": audit["event_id"],
             "next_mission": None,
         }
+        if wt_report:
+            out["worktree"] = wt_report
+        return out
 
     def list_audit_ids(self) -> list[str]:
         return sorted(p.stem for p in self.audit_dir.glob("A-*.json"))

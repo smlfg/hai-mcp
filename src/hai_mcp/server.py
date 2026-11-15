@@ -3,17 +3,20 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 from typing import Annotated, Any
 
 import anyio
-from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp import Context, FastMCP
 from mcp.types import ToolAnnotations
 from pydantic import Field
 
+from hai_mcp.blocker_reporting import publish as publish_blocker
 from hai_mcp.boundary import strict_optional_time_limit_hours
 from hai_mcp.config import Config, SERVER_NAME
 from hai_mcp.http_transport import http_bind_allowed, http_token_from_env, wrap_with_bearer_token
 from hai_mcp.state import ControlPlane
+from hai_mcp.owner_gate import normalize_approval_context
 
 # The boundary deliberately refuses coercion (see boundary.py): a string "2" must be
 # rejected, never silently become 2. Bare `Any` however advertises a schema with no type
@@ -24,7 +27,20 @@ StrictInt = Annotated[Any, Field(json_schema_extra={"type": "integer"})]
 StrictBool = Annotated[Any, Field(json_schema_extra={"type": "boolean"})]
 StrictNumber = Annotated[Any, Field(json_schema_extra={"type": "number"})]
 
-mcp = FastMCP(SERVER_NAME)
+BLOCKER_INSTRUCTIONS = (
+    "Wenn ein eigener HAI-MCP-Fehler die Arbeit blockiert, melde ihn selbstständig mit "
+    "hai_report_blocker an smlfg/hai-mcp; keine erneute Einzelfrage. Beschreibe Problem, "
+    "Soll/Ist, blockierte Aktion, Belege und warum HAI verantwortlich ist. Kennzeichne "
+    "die Ursache ehrlich als unbekannt, vermutet oder belegt. Normale Gate-Ablehnungen, "
+    "Owner-Abbruch/Timeout und Lease-Ablauf sind keine Bugs. Geschützte Arbeit bleibt gestoppt. "
+    "Bei Transport closed nutze denselben Publisher ohne MCP über die konfigurierte Python-CLI: "
+    + repr([sys.executable, "-m", "hai_mcp.blocker_reporting", "--report-file", "<structured-report.json>"])
+    + ". Verwende nur minimale nicht vertrauliche Belege, keine Rohlogs, Umgebungsvariablen "
+    "oder Projektinhalte. Publisher-Ausfälle niemals rekursiv melden: pending lokal sichern, "
+    "Status ehrlich nennen und mit der ausgegebenen retry_argv erneut abgleichen. Erst bestätigte "
+    "GitHub-URL und Readback zählen als gemeldet; Reporting umgeht keine Owner-/Lease-Gates."
+)
+mcp = FastMCP(SERVER_NAME, instructions=BLOCKER_INSTRUCTIONS)
 
 _cp: ControlPlane | None = None
 
@@ -38,6 +54,68 @@ def get_control_plane() -> ControlPlane:
 
 def _json(result: dict[str, Any]) -> str:
     return json.dumps(result, indent=2, ensure_ascii=False, sort_keys=True)
+
+
+def _approval_context(value: dict[str, str] | None, ctx: Context | None) -> dict[str, str]:
+    """Prefer explicit labels; protocol clientInfo can only supply the agent label."""
+    labels = normalize_approval_context(value)
+    if "agent" not in labels and ctx is not None:
+        try:
+            params = ctx.session.client_params
+            info = params.clientInfo if params else None
+            agent = (getattr(info, "title", None) or info.name) if info else None
+            labels.update(normalize_approval_context({"agent": agent}))
+        except (ValueError, AttributeError):
+            pass  # Direct Python calls have no active MCP request context.
+    return labels
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False
+    )
+)
+def hai_report_blocker(
+    category: Annotated[str, Field(description="High-level defect category.")],
+    problem: Annotated[str, Field(description="Short problem statement.")],
+    observed: Annotated[str, Field(description="What was observed (actual behavior).")],
+    expected: Annotated[str, Field(description="What was expected instead.")],
+    blocked_action: Annotated[str, Field(description="Work action blocked by the defect.")],
+    hai_responsibility: Annotated[str, Field(description="Why HAI-MCP is responsible, not the agent.")],
+    evidence: Annotated[list[str], Field(description="Minimal non-confidential evidence strings.")],
+    cause_confidence: Annotated[
+        str, Field(description="unknown, suspected, or proven.")
+    ] = "unknown",
+    cause: Annotated[str | None, Field(description="Optional suspected cause.")] = None,
+    cause_evidence: Annotated[list[str] | None, Field(description="Optional cause evidence.")] = None,
+    agent: Annotated[str | None, Field(description="Reporting agent label.")] = None,
+    session: Annotated[str | None, Field(description="Readable session/chat title.")] = None,
+    error_code: Annotated[str | None, Field(description="HAI error code if known.")] = None,
+    unexpected_gate: Annotated[
+        StrictBool, Field(description="Literal true if a normal gate mis-fired.")
+    ] = False,
+    unexpected_gate_reason: Annotated[str | None, Field(description="Why the gate was unexpected.")] = None,
+    unexpected_gate_evidence: Annotated[
+        list[str] | None, Field(description="Evidence the gate was unexpected.")
+    ] = None,
+) -> str:
+    """Autonomously report a genuine blocking HAI defect to the fixed smlfg/hai-mcp repo.
+
+    Use this when HAI-MCP itself blocks protected work with a defect (not normal gate
+    denials or lease expiry). Expected gates are skipped. Submit minimal non-confidential
+    evidence; never raw logs, environment or project content. No lease or ControlPlane is
+    required. Pending is not success; retry the returned CLI command. Do not recursively
+    report publisher failures.
+    """
+    report = {"category": category, "problem": problem, "observed": observed, "expected": expected,
+              "blocked_action": blocked_action, "hai_responsibility": hai_responsibility,
+              "evidence": evidence, "cause_confidence": cause_confidence, "unexpected_gate": unexpected_gate}
+    for key, value in {"cause": cause, "cause_evidence": cause_evidence, "agent": agent,
+                       "session": session, "error_code": error_code, "unexpected_gate_reason": unexpected_gate_reason,
+                       "unexpected_gate_evidence": unexpected_gate_evidence}.items():
+        if value is not None:
+            report[key] = value
+    return _json(publish_blocker(report))
 
 
 @mcp.tool(
@@ -72,7 +150,9 @@ def hai_status(
     """Return ACTIVE lanes, focus, inbox count, and optional project next-step flags.
 
     Use this when you need current control-plane state; use hai_health instead to diagnose
-    the server or project path itself. Read-only. Returns JSON with ok and the status fields.
+    the server or project path itself. When a capacity window is active, mission_capacity lists
+    each mission's managed worktree path/branch and any orphaned trees under .worktrees/.
+    Read-only. Returns JSON with ok and the status fields.
     """
     return _json(get_control_plane().status(project_path))
 
@@ -153,11 +233,14 @@ def hai_set_focus(
         str | None, Field(description="Optional human-readable label for the lane.")
     ] = None,
 ) -> str:
-    """Set focus and register an ACTIVE lane (maximum two).
+    """Set focus and register an ACTIVE lane; default maximum two.
 
     Use this when choosing what to work on; use hai_park instead for thoughts that must not
-    become lanes. Repeating the same focus is idempotent. Returns JSON with ok, focus_id,
-    active, and active_count, or max_active_lanes.
+    become lanes. Repeating the same focus is idempotent. Above two, an active bounded window
+    and distinct registered Git worktrees are mandatory for every lane (maximum five). Linked
+    roots require native owner binding. Root updates and focusing existing lanes validate the
+    whole prospective group. Inspect hai_health.lane_isolation for conditional capacity and
+    recovery details. Returns JSON with ok, focus_id, active, and active_count, or max_active_lanes.
     """
     return _json(get_control_plane().set_focus(focus_id, project_path=project_path, label=label))
 
@@ -209,13 +292,23 @@ def hai_accept_next_step(
         StrictBool,
         Field(description="Legacy gate only: literal true asserts owner approval (requires reason)."),
     ] = False,
+    approval_context: Annotated[
+        dict[str, str] | None,
+        Field(description="Display labels: agent, session (chat title), topic."),
+    ] = None,
+    ctx: Context | None = None,
 ) -> str:
     """Promote proposed or provided content to canonical NEXT_STEP.md under the owner gate.
 
     Use this when a proposal should become canonical; use hai_propose_next_step instead to
-    draft it, or hai_get_next_step to read it. The nonce gate needs a first call without
-    owner_code, then a second call with the owner code; legacy mode needs owner_ack=true plus
-    reason. Bound to the exact content and single-use; returns JSON with ok or error.
+    draft it, or hai_get_next_step to read it. Default gate (nonce): call once WITHOUT
+    owner_code; file/ntfy delivers a one-time code to the owner (never to this client); call
+    again with owner_code. touchid (macOS) shows a Touch ID prompt in the server process;
+    when status is owner_approved, call again with the same arguments and no owner_code.
+    Legacy gate (ack_legacy): owner_ack=true + reason. Supply approval_context with agent,
+    session (readable chat title), and topic. Labels are client-provided display context, not
+    authenticated identity. Repeat the same labels on the follow-up call; changed labels
+    require new approval. Bound to the exact content and single-use; returns JSON with ok or error.
     """
     return _json(
         get_control_plane().accept_next_step(
@@ -224,6 +317,7 @@ def hai_accept_next_step(
             reason=reason,
             content=content,
             owner_code=owner_code,
+            approval_context=_approval_context(approval_context, ctx),
         )
     )
 
@@ -307,13 +401,27 @@ def hai_open_mission(
         str | None,
         Field(description="One-time owner code for superseding; omit on the first call."),
     ] = None,
+    approval_context: Annotated[
+        dict[str, str] | None,
+        Field(description="Display labels for owner gate when superseding an orphan."),
+    ] = None,
+    ctx: Context | None = None,
 ) -> str:
-    """Open a bounded mission with a versioned canonical contract; one active mission globally.
+    """Open a bounded mission with a versioned canonical contract.
 
     Use this when you need the full contract surface; use hai_mission_start for the thin
-    fast-start wrapper, or hai_proof / hai_close_mission to finish the mission. An orphaned
-    active mission can be superseded with supersede_orphan=true and a reason under the owner
-    gate. Purely additive when no mission is active; returns JSON with ok or error.
+    fast-start wrapper, or hai_proof / hai_close_mission to finish the mission. Orphaned
+    blocker: if active_mission_exists comes back with orphaned=true (no valid session lease
+    left), retry with supersede_orphan=true + supersede_reason. That abandons the orphan under
+    the owner gate exactly like hai_close_mission(closure="abandoned") (touchid: on
+    owner_approved call again with the same arguments), then opens this mission. A mission
+    with a live lease is never superseded. Default: one active mission. An owner-enabled
+    exact-project capacity window permits at most five missions with disjoint canonical
+    contract paths and five writers globally. The server auto-creates an isolated Git worktree
+    per mission under <project>/.worktrees/<mission_id> after one owner-approved capacity
+    worktree grant for the window (do not run git worktree add yourself). hai_bind_worktree remains
+    for rare manual external trees only. Supply constraints.project_path matching the capacity
+    policy project; session write roots are the managed worktrees, not the main checkout.
     """
     return _json(
         get_control_plane().open_mission(
@@ -327,6 +435,7 @@ def hai_open_mission(
             supersede_reason=supersede_reason,
             owner_ack=owner_ack,
             owner_code=owner_code,
+            approval_context=_approval_context(approval_context, ctx),
         )
     )
 
@@ -359,6 +468,10 @@ def hai_authorize_session(
         Field(description="Optional device id; required when the contract has a project_id."),
     ] = None,
     harness_id: Annotated[str | None, Field(description="Optional harness identifier.")] = None,
+    write_paths: Annotated[
+        list[str] | None,
+        Field(description="Optional scoped write paths for capacity writer leases."),
+    ] = None,
 ) -> str:
     """Grant a time-bounded session lease tied to the mission id and exact contract version.
 
@@ -379,6 +492,41 @@ def hai_authorize_session(
             criterion_ids=criterion_ids,
             device_id=device_id,
             harness_id=harness_id,
+            write_paths=write_paths,
+        )
+    )
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False
+    )
+)
+def hai_bind_worktree(
+    project_path: Annotated[str, Field(description="Canonical capacity project path.")],
+    worktree_path: Annotated[str, Field(description="Exact Git worktree path to approve.")],
+    expires_at: Annotated[str, Field(description="UTC expiry within one hour and the capacity window.")],
+    reason: Annotated[str, Field(description="Owner-visible reason for the binding approval.")],
+    approval_context: Annotated[
+        dict[str, str] | None, Field(description="Display labels: agent, session, topic.")
+    ] = None,
+    ctx: Context | None = None,
+) -> str:
+    """Approve one exact registered linked worktree created outside the auto path.
+
+    Capacity-window missions normally receive server-managed worktrees from hai_open_mission
+    after a single capacity_worktrees owner grant. Use this only for an externally created
+    tree that must be bound manually. Requires an active exact-project capacity window and
+    the configured owner gate (file/nonce or Touch ID). Explicit UTC expiry must be within
+    one hour and no later than that window.
+    """
+    return _json(
+        get_control_plane().bind_worktree(
+            project_path,
+            worktree_path,
+            expires_at,
+            reason,
+            _approval_context(approval_context, ctx),
         )
     )
 
@@ -538,13 +686,22 @@ def hai_recontract(
         str | None,
         Field(description="One-time owner code bound to the diff; omit on the first call."),
     ] = None,
+    approval_context: Annotated[
+        dict[str, str] | None,
+        Field(description="Display labels: agent, session (chat title), topic."),
+    ] = None,
+    ctx: Context | None = None,
 ) -> str:
     """Apply a visible field-level contract diff and revoke all leases, under the owner gate.
 
     Use this when the contract itself must change; use hai_get_contract instead to read it, or
-    hai_close_mission to end the mission instead. The nonce gate returns the diff on the first
-    call, then takes an owner_code; legacy mode uses owner_ack=true. Destructive because it
-    replaces contract state and revokes leases; returns JSON with ok or error.
+    hai_close_mission to end the mission instead. First call (no owner_code) returns the diff.
+    file/ntfy delivers a one-time code to the owner; call again with owner_code. touchid
+    (macOS): when status is owner_approved, call again with the same arguments and no owner_code.
+    Legacy gate: owner_ack=true. Supply approval_context with agent, session (readable chat
+    title), and topic. Labels are client-provided display context, not authenticated identity.
+    Repeat the same labels on the follow-up call; changed labels require new approval. Destructive
+    because it replaces contract state and revokes leases; returns JSON with ok or error.
     """
     return _json(
         get_control_plane().recontract(
@@ -556,6 +713,7 @@ def hai_recontract(
             owner_ack=owner_ack,
             break_glass_marker=break_glass_marker,
             owner_code=owner_code,
+            approval_context=_approval_context(approval_context, ctx),
         )
     )
 
@@ -588,13 +746,24 @@ def hai_close_mission(
         str | None,
         Field(description="One-time owner code for abandonment; omit on the first call."),
     ] = None,
+    approval_context: Annotated[
+        dict[str, str] | None,
+        Field(description="Display labels: agent, session (chat title), topic."),
+    ] = None,
+    ctx: Context | None = None,
 ) -> str:
     """Complete a mission with verified evidence, or abandon it under the owner gate.
 
     Use this when ending a mission; use hai_proof instead for the completed-only wrapper, or
-    hai_recontract to modify it. Completed needs verified evidence per criterion; abandoned
-    needs the owner gate and reason. Destructive terminal state change with lease revocation;
-    returns JSON with ok or error.
+    hai_recontract to modify it. Capacity managed missions remove their Git worktree on close;
+    the result may include a worktree report (branch, commits, removed). Completed needs verified
+    evidence per criterion; abandoned needs the owner gate and reason. Abandon: file/ntfy delivers a one-time code; call again
+    with owner_code. touchid (macOS): when status is owner_approved, call again with the same
+    arguments and no owner_code. Legacy gate: owner_ack=true. Supply approval_context with
+    agent, session (readable chat title), and topic. Labels are client-provided display
+    context, not authenticated identity. Repeat the same labels on the follow-up call;
+    changed labels require new approval. Destructive terminal state change with lease
+    revocation; returns JSON with ok or error.
     """
     return _json(
         get_control_plane().close_mission(
@@ -606,6 +775,7 @@ def hai_close_mission(
             owner_ack=owner_ack,
             device_id=device_id,
             owner_code=owner_code,
+            approval_context=_approval_context(approval_context, ctx),
         )
     )
 

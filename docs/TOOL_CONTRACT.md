@@ -21,7 +21,8 @@
 | `hai_accept_next_step` | NEXT_STEP.md | **owner gate**: one-time code from the owner channel, or Touch ID on macOS, bound to the body (`ack_legacy`: owner_ack=true + reason) |
 | `hai_checkpoint` | history/checkpoints | none |
 | `hai_recover` | no (read + advice) | none |
-| `hai_open_mission` | mission + contract v1 | valid finite contract; no second active mission. Orphaned active mission (no valid lease): `supersede_orphan=true` + reason abandons it under the **owner gate**, then opens |
+| `hai_open_mission` | mission + contract v1 | valid finite contract; no second active mission. Orphaned active mission (no valid lease): `supersede_orphan=true` + reason abandons it under the **owner gate**, then opens. Active capacity window: first mission may require **owner gate** `capacity_worktrees` (one grant per window fingerprint); server auto-creates managed worktrees |
+| `hai_bind_worktree` | worktree binding store | **owner gate** (manual externally created worktree only; auto path uses the capacity grant) |
 | `hai_bind_project` | mount table | **owner_ack=true + reason** |
 | `hai_authorize_session` | session lease | active mission; current contract version; capacity |
 | `hai_get_contract` | no | valid non-expired session lease |
