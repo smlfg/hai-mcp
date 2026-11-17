@@ -24,6 +24,7 @@ from hai_mcp.owner_gate import OwnerGate
 from hai_mcp.paths import PathError, assert_relative_allowed, assert_under, real_path, require_project_path
 from hai_mcp.projects import ProjectStore, validate_ident
 from hai_mcp.storage import read_json, write_json
+from hai_mcp.work_profile import HOW_TO_CHANGE, WORK_PROFILE_KEYS, WorkProfileStore
 
 SENSITIVE_TRACE_ACTIONS = frozenset(
     {"commit", "push", "deploy", "delete", "secrets", "force_push", "rm_rf"}
@@ -47,6 +48,18 @@ RECONTRACT_SYSTEM_FIELDS = frozenset(
     }
 )
 VALID_RECONTRACT_MODES = frozenset({"normal", "blocker", "break_glass"})
+
+
+def _profile_keys_in(changes: dict[str, Any] | None) -> set[str]:
+    """Forbidden work-profile keys in a recontract changes object (top level or constraints)."""
+    fields: set[str] = set()
+    if not isinstance(changes, dict):
+        return fields
+    fields.update(k for k in changes if k in WORK_PROFILE_KEYS)
+    nested = changes.get("constraints")
+    if isinstance(nested, dict):
+        fields.update(k for k in nested if k in WORK_PROFILE_KEYS)
+    return fields
 
 
 def _utc_now() -> str:
@@ -105,6 +118,7 @@ class MissionEngine:
         self.audit_dir.mkdir(parents=True, exist_ok=True)
         self.parking_dir.mkdir(parents=True, exist_ok=True)
         self.owner_gate = OwnerGate(self.cfg, audit=self.append_audit)
+        self.work_profile = WorkProfileStore(self.cfg, self)
 
     @property
     def missions_dir(self) -> Path:
@@ -214,6 +228,27 @@ class MissionEngine:
             self.active_pointer_path,
             {"mission_id": mission_id, "status": status, "updated_at": _utc_now()},
         )
+
+    def _deny_work_profile_change(
+        self,
+        tool: str,
+        mission_id: str | None,
+        fields: set[str],
+    ) -> dict[str, Any]:
+        self.append_audit(
+            "work_profile_change_denied",
+            {"tool": tool, "mission_id": mission_id, "fields": sorted(fields)},
+        )
+        return {
+            "ok": False,
+            "status": "denied",
+            "error": "work_profile_not_agent_writable",
+            "message": (
+                "The work profile is owner-only. Only the owner can change it via "
+                "`hai-mcp` in a terminal in the project folder (raises need one owner confirmation)."
+            ),
+            "how_to_change": HOW_TO_CHANGE,
+        }
 
     def _reject_mission_id(self, mission_id: str) -> dict[str, Any] | None:
         ok, message = validate_mission_id(mission_id)
@@ -412,6 +447,10 @@ class MissionEngine:
         owner_ack: Any = False,
         owner_code: Any = None,
     ) -> dict[str, Any]:
+        fields = _profile_keys_in(constraints)
+        if fields:
+            return self._deny_work_profile_change("hai_open_mission", None, fields)
+
         orphan: dict[str, Any] | None = None
         with mission_state_lock(self.cfg.hai_home):
             active = self.load_active_pointer()
@@ -833,23 +872,75 @@ class MissionEngine:
                     "clause": "authorize_session.criterion_ids",
                 }
 
+            prof = self.work_profile.active_for_mission(mission_id)
+            profile_source = "profile" if prof else "defaults"
+
             max_parallel = int(contract.get("constraints", {}).get("max_parallel_sessions", 1))
+            if prof:
+                max_parallel = max(max_parallel, int(prof.get("max_writer_sessions", 1)))
+
             active_sessions = [s for s in self.list_sessions(mission_id) if s.get("status") == "active"]
             now_valid = []
             for s in active_sessions:
                 ok, _, _ = self._session_valid(s, contract)
                 if ok:
                     now_valid.append(s)
-            if len(now_valid) >= max_parallel:
+
+            def _capacity_denied(
+                limit_field: str,
+                limit_value: int,
+                in_use: int,
+                error_code: str,
+                message: str,
+                clause: str,
+            ) -> dict[str, Any]:
+                self.work_profile.record_waiting(
+                    mission_id, agent_identity, "capacity", limit_field, message
+                )
                 return {
                     "ok": False,
                     "status": "denied",
-                    "error": "parallel_session_denied",
-                    "message": f"max_parallel_sessions={max_parallel} already reached",
-                    "clause": "constraints.max_parallel_sessions",
+                    "error": error_code,
+                    "message": message,
+                    "waiting_for": "capacity",
+                    "limit": limit_field,
+                    "limit_value": limit_value,
+                    "in_use": in_use,
+                    "profile_source": profile_source,
+                    "how_to_change": HOW_TO_CHANGE,
+                    "clause": clause,
                 }
 
+            if len(now_valid) >= max_parallel:
+                limit_field = "max_writer_sessions" if prof else "max_parallel_sessions"
+                return _capacity_denied(
+                    limit_field,
+                    max_parallel,
+                    len(now_valid),
+                    "parallel_session_denied",
+                    f"max_parallel_sessions={max_parallel} already reached; "
+                    "wait for a lease to end or ask the owner to raise the work profile",
+                    "constraints.max_parallel_sessions",
+                )
+
+            if prof:
+                used = sum(
+                    1 for s in self.list_sessions(mission_id) if s.get("profile_id") == prof.get("profile_id")
+                )
+                if used >= int(prof.get("lease_budget", 0)):
+                    return _capacity_denied(
+                        "lease_budget",
+                        int(prof["lease_budget"]),
+                        used,
+                        "profile_lease_budget_exhausted",
+                        f"lease_budget={prof['lease_budget']} exhausted for this work profile; "
+                        "ask the owner to raise or renew it",
+                        "work_profile.lease_budget",
+                    )
+
             duration = max(1, min(duration_raw, 24 * 60))
+            if prof:
+                duration = min(duration, int(prof.get("lease_ttl_minutes", duration)))
             granted_caps = [str(c).strip() for c in (capabilities or []) if str(c).strip()]
             allowed_caps = set(contract.get("constraints", {}).get("capabilities", []))
             if granted_caps and not set(granted_caps).issubset(allowed_caps):
@@ -921,7 +1012,10 @@ class MissionEngine:
                 lease["device_id"] = lease_device_id
             if lease_harness_id:
                 lease["harness_id"] = lease_harness_id
+            if prof:
+                lease["profile_id"] = prof["profile_id"]
             self.save_session(lease)
+            self.work_profile.clear_waiting(mission_id, agent_identity)
             audit = self.append_audit(
                 "session_authorized",
                 {"mission_id": mission_id, "session_id": session_id, "contract_version": version},
@@ -932,6 +1026,7 @@ class MissionEngine:
                 "session_id": session_id,
                 "session_lease": lease,
                 "audit_event_id": audit["event_id"],
+                "waiting_for": "none",
             }
 
     def get_session(self, session_id: str) -> dict[str, Any] | None:
@@ -1361,6 +1456,10 @@ class MissionEngine:
         err = self._reject_mission_id(mission_id)
         if err:
             return err
+
+        fields = _profile_keys_in(changes)
+        if fields:
+            return self._deny_work_profile_change("hai_recontract", mission_id, fields)
 
         reason = str(reason or "").strip()
         mode = str(mode or "normal").strip().lower()

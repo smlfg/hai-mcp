@@ -22,6 +22,7 @@ from hai_mcp.paths import (
     require_project_path,
 )
 from hai_mcp.storage import atomic_write_text, read_json, write_json
+from hai_mcp.work_profile import WorkProfileStore
 
 ARTIFACT_NAMES = [
     "PROJECT_STATE.md",
@@ -528,6 +529,10 @@ class ControlPlane:
 
     def get_contract(self, session_id: str) -> dict[str, Any]:
         return self.mission.get_contract(session_id)
+
+    def get_profile(self, project_path: str | None = None, mission_id: str | None = None) -> dict[str, Any]:
+        store = WorkProfileStore(self.cfg, self.mission)
+        return store.describe(project_path=project_path, mission_id=mission_id)
 
     def check_activity(
         self,

@@ -63,7 +63,7 @@ from hai_mcp.paths import real_path
 from hai_mcp.storage import read_json, write_json
 
 OWNER_GATE_MODES = frozenset({"nonce", "ack_legacy"})
-GATE_ACTIONS = frozenset({"accept_next_step", "recontract", "abandon_mission"})
+GATE_ACTIONS = frozenset({"accept_next_step", "recontract", "abandon_mission", "set_work_profile"})
 MAX_ATTEMPTS = 3
 _LIVE_CHALLENGE_STATUSES = frozenset({"pending", "approved"})
 
