@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 from typing import Annotated, Any
 
 import anyio
@@ -432,6 +433,29 @@ def hai_get_contract(
 
 @mcp.tool(
     annotations=ToolAnnotations(
+        readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False
+    )
+)
+def hai_get_profile(
+    project_path: Annotated[
+        str | None, Field(description="Optional project directory whose work profile should be reported.")
+    ] = None,
+    mission_id: Annotated[
+        str | None, Field(description="Optional mission id whose work profile should be reported.")
+    ] = None,
+) -> str:
+    """Return the effective work profile (owner-set capacity bounds) for a project or mission.
+
+    Use this to see the current writer-slot and lease limits, expiry, free capacity, and
+    waiting sessions before requesting a session lease; use hai_authorize_session to request
+    the lease itself. Read-only: the work profile can only be changed by the owner via
+    `hai-mcp` in a terminal. Returns JSON with ok, source, limits, and capacity fields.
+    """
+    return _json(get_control_plane().get_profile(project_path=project_path, mission_id=mission_id))
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
         readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False
     )
 )
@@ -836,7 +860,7 @@ def hai_stop(
     )
 
 
-def main(argv: list[str] | None = None) -> None:
+def _serve(argv: list[str] | None) -> None:
     parser = argparse.ArgumentParser(description="HAI-MCP control-plane server")
     parser.add_argument(
         "--transport",
@@ -885,6 +909,38 @@ def main(argv: list[str] | None = None) -> None:
         return
 
     mcp.run(transport="stdio")
+
+
+def main(argv: list[str] | None = None) -> None:
+    if argv is None:
+        argv = sys.argv[1:]
+
+    if argv and argv[0] == "serve":
+        _serve(argv[1:])
+        return
+
+    if argv and argv[0] in {"status", "reset", "setup"}:
+        from hai_mcp.cli import run_cli
+
+        rc = run_cli(argv)
+        if rc:
+            raise SystemExit(rc)
+        return
+
+    if (
+        not argv
+        and sys.stdin.isatty()
+        and sys.stdout.isatty()
+        and os.environ.get("HAI_MCP_NO_DIALOG") is None
+    ):
+        from hai_mcp.cli import run_cli
+
+        rc = run_cli(["setup"])
+        if rc:
+            raise SystemExit(rc)
+        return
+
+    _serve(argv)
 
 
 if __name__ == "__main__":

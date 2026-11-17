@@ -135,6 +135,37 @@ uv run hai-mcp
 
 ---
 
+## Setup-CLI (Arbeitsprofil)
+
+Before agentic work starts, the owner sets a time-bounded **work profile** in a
+short terminal dialog. Agents then work inside that profile — no further owner
+confirmation per session.
+
+| Command | Behaviour |
+|---|---|
+| `hai-mcp` (no args, in a terminal) | Opens the interactive setup dialog. |
+| `hai-mcp status` | Prints the active profile, expiry, free capacity, waiting sessions. Changes nothing. |
+| `hai-mcp reset` | Immediately falls back to defaults (no owner gate — it only lowers). |
+| `hai-mcp serve` | Forces the MCP-server path (same `--transport/--host/--port`). |
+| Started by an MCP client (stdio, no TTY) | Behaves exactly as the MCP server; the dialog never appears. |
+
+The dialog distinguishes "interactive human" from "MCP-server start" via TTY
+detection (or the explicit `serve` subcommand), so existing client configs keep
+working. Presets: `careful` (1 writer, 2 leases, 30 min TTL) and `fast`
+(5 writers, 20 leases, 2 h TTL). Raised values require exactly one owner
+confirmation (Touch ID, file code, or ntfy); lowering or reset needs none.
+Profiles are stored per project in `HAI_HOME/profiles`, never in the repo, and
+fall back automatically when the mission ends, when `expires_at` is reached, or
+at the day boundary.
+
+Environment:
+
+- `HAI_DAY_BOUNDARY` — `"HH:MM"` local rollover time (default `00:00`).
+- `HAI_MAX_ACTIVE_MISSIONS_CAP` — upper bound for `max_active_missions` (default `1`).
+- `HAI_MCP_NO_DIALOG` — set to skip the TTY dialog and always start the server.
+
+---
+
 ## Sample usage — wiring the server into a client
 
 The server is **transport-agnostic**; every MCP client gets the same 23

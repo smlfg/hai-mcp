@@ -13,6 +13,7 @@ READ_ONLY_TOOLS = {
     "hai_read_artifacts",
     "hai_recover",
     "hai_get_contract",
+    "hai_get_profile",
 }
 
 

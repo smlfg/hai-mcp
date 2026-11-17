@@ -25,6 +25,7 @@
 | `hai_bind_project` | mount table | **owner_ack=true + reason** |
 | `hai_authorize_session` | session lease | active mission; current contract version; capacity |
 | `hai_get_contract` | no | valid non-expired session lease |
+| `hai_get_profile` | no | none (read-only) |
 | `hai_check_activity` | audit only | valid session lease |
 | `hai_park_item` | parking record | rationale required; no execution right |
 | `hai_recontract` | new contract version + lease revocation | **owner gate**: one-time code or Touch ID, bound to the diff (`ack_legacy`: owner_ack=true); reason required; break_glass needs marker |
@@ -56,6 +57,7 @@ Derived from the `Mutates` column; `openWorldHint` is `false` for every tool. `i
 | `hai_bind_project` | no | no | yes |
 | `hai_authorize_session` | no | no | no |
 | `hai_get_contract` | yes | no | yes |
+| `hai_get_profile` | yes | no | yes |
 | `hai_check_activity` | no | no | no |
 | `hai_park_item` | no | no | no |
 | `hai_recontract` | no | yes | no |
@@ -107,6 +109,8 @@ Structured JSON in tool result with `ok: false` and `error` code:
 - `lease_revoked`
 - `review_required`
 - `parallel_session_denied`
+- `profile_lease_budget_exhausted`
+- `work_profile_not_agent_writable`
 - `device_mount_required`
 - `owner_channel_unavailable` (owner code could not be delivered, or Touch ID could not run; gate stays closed)
 - `owner_denied` (Touch ID was cancelled, timed out, or attested a different change; gate stays closed)
