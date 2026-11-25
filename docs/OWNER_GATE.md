@@ -43,7 +43,24 @@ Gated actions: `hai_accept_next_step`, `hai_recontract`,
 | `ntfy` | HTTP POST to `HAI_OWNER_NTFY_URL/HAI_OWNER_NTFY_TOPIC` (default server `https://ntfy.sh`; optional `HAI_OWNER_NTFY_TOKEN` as Bearer). The code lands on the owner's phone or desktop. | Off-machine: the agent cannot read it. The topic name is a secret — generate a random one, or self-host ntfy. Delivery failure keeps the gate closed (`owner_channel_unavailable`). |
 
 Planned, not implemented: MCP elicitation (server asks the host UI directly,
-bypassing the model) and a Touch ID / `LAContext` presence check on macOS.
+bypassing the model).
+
+## Touch ID (OR path, macOS)
+
+When `HAI_OWNER_BIOMETRIC=tidcli`, the owner can satisfy the **same** pending
+challenge with either the relayed `owner_code` **or** `owner_biometric=true`
+(literal boolean on the MCP tool). The biometric path invokes the [tidcli](https://github.com/singe/tidcli)
+subprocess with a short reason string; exit `0` consumes the challenge (same as
+a correct code). Failed or cancelled Touch ID does **not** increment code guess
+attempts. Default is `off` until the owner enables tidcli.
+
+| Path | Client parameter | Owner action |
+| --- | --- | --- |
+| Code (default) | `owner_code=<XXXX-XXXX>` | Read code from file/ntfy channel, relay to agent |
+| Biometric | `owner_biometric=true` | Approve Touch ID prompt on the Mac running hai-mcp |
+
+File and ntfy delivery are unchanged: the first call still issues a challenge
+and delivers a code to the owner channel even when biometric is enabled.
 
 ## Configuration
 
@@ -56,9 +73,11 @@ bypassing the model) and a Touch ID / `LAContext` presence check on macOS.
 | `HAI_OWNER_NTFY_TOPIC` | — | ntfy topic (required for `ntfy`). |
 | `HAI_OWNER_NTFY_TOKEN` | — | Optional bearer token. |
 | `HAI_OWNER_CODE_TTL` | `600` | Code lifetime in seconds (minimum 30). |
+| `HAI_OWNER_BIOMETRIC` | `off` | `off` or `tidcli`. Unknown values fall back to `off` with a config warning. |
+| `HAI_OWNER_BIOMETRIC_BIN` | — | Optional path to `tidcli`; otherwise `PATH` is searched. |
 
-`hai_health` reports the active mode and channel; `hai_status` reports the
-number of live challenges.
+`hai_health` reports the active mode, channel, and `owner_gate.biometric`
+(`mode`, `available`); `hai_status` reports the number of live challenges.
 
 ## Legacy mode `ack_legacy`
 
@@ -78,9 +97,11 @@ Pending (first call, or repeat before the owner answered):
 ```
 
 Rejected code: `detail: "invalid_owner_code"` with `attempts_remaining`;
-after the third miss `status: "cancelled"`. No live challenge for the
-presented change (used, expired, cancelled, or the change was swapped):
-`detail: "no_pending_challenge"`. Malformed input: `detail:
+after the third miss `status: "cancelled"`. Biometric rejected: `detail:
+"owner_biometric_failed"` (does not count as a code attempt). Biometric
+disabled or binary missing: `error: "owner_biometric_unavailable"`. No live
+challenge for the presented change (used, expired, cancelled, or the change
+was swapped): `detail: "no_pending_challenge"`. Malformed input: `detail:
 "malformed_owner_code"` (does not count as an attempt).
 
 Passed: the normal success result plus

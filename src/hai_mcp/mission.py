@@ -1222,6 +1222,7 @@ class MissionEngine:
         owner_ack: Any = False,
         break_glass_marker: Any = False,
         owner_code: Any = None,
+        owner_biometric: Any = False,
     ) -> dict[str, Any]:
         err = self._reject_mission_id(mission_id)
         if err:
@@ -1289,6 +1290,7 @@ class MissionEngine:
                 summary=f"Recontract mission {mission_id} v{version} -> v{version + 1} ({mode})",
                 preview={"mission_id": mission_id, "mode": mode, "reason": reason, "diff": diff},
                 owner_code=owner_code,
+                owner_biometric=owner_biometric,
             )
             if not passed:
                 gate_result["diff"] = diff
@@ -1432,6 +1434,7 @@ class MissionEngine:
         owner_ack: Any = False,
         device_id: str | None = None,
         owner_code: Any = None,
+        owner_biometric: Any = False,
     ) -> dict[str, Any]:
         err = self._reject_mission_id(mission_id)
         if err:
@@ -1504,6 +1507,7 @@ class MissionEngine:
                         "abandon_reason": outcome_summary[:200],
                     },
                     owner_code=owner_code,
+                    owner_biometric=owner_biometric,
                 )
                 if not passed:
                     return gate_result

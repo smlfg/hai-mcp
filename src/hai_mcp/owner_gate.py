@@ -37,6 +37,8 @@ import hmac
 import json
 import os
 import secrets
+import shutil
+import subprocess
 import time
 import urllib.error
 import urllib.request
@@ -54,6 +56,8 @@ OWNER_GATE_MODES = frozenset({"nonce", "ack_legacy"})
 OWNER_CHANNELS = frozenset({"file", "ntfy"})
 GATE_ACTIONS = frozenset({"accept_next_step", "recontract", "abandon_mission"})
 MAX_ATTEMPTS = 3
+BIOMETRIC_TIMEOUT_SECONDS = 60
+_BIOMETRIC_REASON_MAX_LEN = 240
 
 # Unambiguous alphabet (no 0/O, 1/I/L): the owner reads the code aloud or types it.
 _CODE_ALPHABET = "23456789ABCDEFGHJKMNPQRSTUVWXYZ"
@@ -192,6 +196,7 @@ class OwnerGate:
     cfg: Config
     audit: Callable[[str, dict[str, Any]], dict[str, Any]]
     opener: Callable[..., Any] | None = None  # test hook for the ntfy channel
+    biometric_runner: Callable[..., Any] | None = None  # test hook for tidcli subprocess
 
     # ----- introspection -------------------------------------------------
 
@@ -221,7 +226,21 @@ class OwnerGate:
                 "ack_legacy: the client asserts owner approval itself; "
                 "this is an honor system, not a gate"
             )
+        info["biometric"] = {
+            "mode": self.cfg.owner_biometric,
+            "available": self._biometric_available(),
+        }
         return info
+
+    def _resolve_biometric_bin(self) -> str | None:
+        if self.cfg.owner_biometric_bin is not None:
+            path = self.cfg.owner_biometric_bin.expanduser()
+            return str(path) if path.is_file() else None
+        found = shutil.which("tidcli")
+        return found
+
+    def _biometric_available(self) -> bool:
+        return self.cfg.owner_biometric == "tidcli" and self._resolve_biometric_bin() is not None
 
     def pending_count(self) -> int:
         if not self.challenges_dir.is_dir():
@@ -351,6 +370,96 @@ class OwnerGate:
 
     # ----- the gate ------------------------------------------------------------
 
+    def _consume_challenge(
+        self,
+        pending: dict[str, Any],
+        action: str,
+        fp: str,
+        audit_event: str,
+    ) -> tuple[bool, dict[str, Any]]:
+        pending["status"] = "consumed"
+        pending["consumed_at"] = _utc_iso()
+        self._save(pending)
+        audit = self.audit(
+            audit_event,
+            {"challenge_id": pending["challenge_id"], "action": action, "fingerprint": fp},
+        )
+        return True, {
+            "gate": "nonce",
+            "challenge_id": pending["challenge_id"],
+            "audit_event_id": audit["event_id"],
+        }
+
+    def _run_biometric(
+        self,
+        *,
+        action: str,
+        summary: str,
+        pending: dict[str, Any],
+        fp: str,
+    ) -> tuple[bool, dict[str, Any]]:
+        if self.cfg.owner_biometric != "tidcli":
+            return False, {
+                "ok": False,
+                "error": "owner_biometric_unavailable",
+                "gate": "nonce",
+                "message": "biometric path disabled (set HAI_OWNER_BIOMETRIC=tidcli to enable)",
+            }
+        binary = self._resolve_biometric_bin()
+        if not binary:
+            return False, {
+                "ok": False,
+                "error": "owner_biometric_unavailable",
+                "gate": "nonce",
+                "message": "tidcli binary not found (install tidcli or set HAI_OWNER_BIOMETRIC_BIN)",
+            }
+        reason = f"HAI owner gate: {action} — {summary}"
+        if len(reason) > _BIOMETRIC_REASON_MAX_LEN:
+            reason = reason[: _BIOMETRIC_REASON_MAX_LEN - 1] + "…"
+        runner = self.biometric_runner or subprocess.run
+        try:
+            completed = runner(
+                [binary, reason],
+                timeout=BIOMETRIC_TIMEOUT_SECONDS,
+                capture_output=True,
+            )
+            exit_code = int(getattr(completed, "returncode", 1))
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            self.audit(
+                "owner_biometric_failed",
+                {
+                    "challenge_id": pending["challenge_id"],
+                    "action": action,
+                    "error": type(exc).__name__,
+                },
+            )
+            return False, {
+                "ok": False,
+                "error": "owner_gate_required",
+                "gate": "nonce",
+                "detail": "owner_biometric_failed",
+                "challenge_id": pending["challenge_id"],
+                "message": f"Touch ID verification failed: {exc}",
+            }
+        if exit_code != 0:
+            self.audit(
+                "owner_biometric_failed",
+                {
+                    "challenge_id": pending["challenge_id"],
+                    "action": action,
+                    "exit_code": exit_code,
+                },
+            )
+            return False, {
+                "ok": False,
+                "error": "owner_gate_required",
+                "gate": "nonce",
+                "detail": "owner_biometric_failed",
+                "challenge_id": pending["challenge_id"],
+                "message": "Touch ID verification was cancelled or rejected",
+            }
+        return self._consume_challenge(pending, action, fp, "owner_biometric_passed")
+
     def require(
         self,
         *,
@@ -359,6 +468,7 @@ class OwnerGate:
         summary: str,
         preview: dict[str, Any],
         owner_code: Any,
+        owner_biometric: Any = False,
     ) -> tuple[bool, dict[str, Any]]:
         """Return ``(passed, result)``.
 
@@ -385,84 +495,94 @@ class OwnerGate:
         with self._lock():
             pending = self._find_pending(action, fp)
 
-            if code is None:
+            if code is not None:
+                if pending is None:
+                    return False, {
+                        "ok": False,
+                        "error": "owner_gate_required",
+                        "gate": "nonce",
+                        "detail": "no_pending_challenge",
+                        "fingerprint": fp,
+                        "message": (
+                            "no live owner challenge for this exact change (never issued, already used, "
+                            "expired or cancelled); call again without owner_code to issue a new one"
+                        ),
+                    }
+
+                if hmac.compare_digest(_hash_code(pending["salt"], code), pending["code_hash"]):
+                    return self._consume_challenge(pending, action, fp, "owner_gate_passed")
+
+                pending["attempts"] = int(pending.get("attempts", 0)) + 1
+                remaining = MAX_ATTEMPTS - pending["attempts"]
+                if remaining <= 0:
+                    pending["status"] = "cancelled"
+                    pending["cancel_reason"] = "max_attempts"
+                self._save(pending)
+                self.audit(
+                    "owner_gate_failed",
+                    {
+                        "challenge_id": pending["challenge_id"],
+                        "action": action,
+                        "attempts": pending["attempts"],
+                        "cancelled": remaining <= 0,
+                    },
+                )
+                return False, {
+                    "ok": False,
+                    "error": "owner_gate_required",
+                    "gate": "nonce",
+                    "detail": "invalid_owner_code",
+                    "challenge_id": pending["challenge_id"],
+                    "attempts_remaining": max(remaining, 0),
+                    "status": "cancelled" if remaining <= 0 else "pending_owner_code",
+                    "message": (
+                        "owner code rejected; the challenge is cancelled — the owner will be asked again on the next call"
+                        if remaining <= 0
+                        else f"owner code rejected; {remaining} attempt(s) remaining"
+                    ),
+                }
+
+            if owner_biometric is True:
+                if self.cfg.owner_biometric != "tidcli":
+                    return False, {
+                        "ok": False,
+                        "error": "owner_biometric_unavailable",
+                        "gate": "nonce",
+                        "message": "biometric path disabled (set HAI_OWNER_BIOMETRIC=tidcli to enable)",
+                    }
                 if pending is None:
                     pending, err = self._issue(action, fp, summary, preview)
                     if err:
                         return False, err
                 assert pending is not None
-                return False, {
-                    "ok": False,
-                    "error": "owner_gate_required",
-                    "gate": "nonce",
-                    "status": "pending_owner_code",
-                    "challenge_id": pending["challenge_id"],
-                    "action": action,
-                    "fingerprint": fp,
-                    "expires_at": pending["expires_at"],
-                    "attempts_remaining": MAX_ATTEMPTS - int(pending.get("attempts", 0)),
-                    "channel": pending.get("delivery", {}).get("channel"),
-                    "message": (
-                        "Owner code required. A one-time code was delivered to the owner "
-                        f"via '{pending.get('delivery', {}).get('channel')}' — not to this client. "
-                        "Ask the owner for the code and call again with owner_code=<code>. "
-                        "The code is bound to this exact change."
-                    ),
-                }
+                return self._run_biometric(
+                    action=action,
+                    summary=summary,
+                    pending=pending,
+                    fp=fp,
+                )
 
             if pending is None:
-                return False, {
-                    "ok": False,
-                    "error": "owner_gate_required",
-                    "gate": "nonce",
-                    "detail": "no_pending_challenge",
-                    "fingerprint": fp,
-                    "message": (
-                        "no live owner challenge for this exact change (never issued, already used, "
-                        "expired or cancelled); call again without owner_code to issue a new one"
-                    ),
-                }
-
-            if hmac.compare_digest(_hash_code(pending["salt"], code), pending["code_hash"]):
-                pending["status"] = "consumed"
-                pending["consumed_at"] = _utc_iso()
-                self._save(pending)
-                audit = self.audit(
-                    "owner_gate_passed",
-                    {"challenge_id": pending["challenge_id"], "action": action, "fingerprint": fp},
-                )
-                return True, {
-                    "gate": "nonce",
-                    "challenge_id": pending["challenge_id"],
-                    "audit_event_id": audit["event_id"],
-                }
-
-            pending["attempts"] = int(pending.get("attempts", 0)) + 1
-            remaining = MAX_ATTEMPTS - pending["attempts"]
-            if remaining <= 0:
-                pending["status"] = "cancelled"
-                pending["cancel_reason"] = "max_attempts"
-            self._save(pending)
-            self.audit(
-                "owner_gate_failed",
-                {
-                    "challenge_id": pending["challenge_id"],
-                    "action": action,
-                    "attempts": pending["attempts"],
-                    "cancelled": remaining <= 0,
-                },
-            )
+                pending, err = self._issue(action, fp, summary, preview)
+                if err:
+                    return False, err
+            assert pending is not None
             return False, {
                 "ok": False,
                 "error": "owner_gate_required",
                 "gate": "nonce",
-                "detail": "invalid_owner_code",
+                "status": "pending_owner_code",
                 "challenge_id": pending["challenge_id"],
-                "attempts_remaining": max(remaining, 0),
-                "status": "cancelled" if remaining <= 0 else "pending_owner_code",
+                "action": action,
+                "fingerprint": fp,
+                "expires_at": pending["expires_at"],
+                "attempts_remaining": MAX_ATTEMPTS - int(pending.get("attempts", 0)),
+                "channel": pending.get("delivery", {}).get("channel"),
                 "message": (
-                    "owner code rejected; the challenge is cancelled — the owner will be asked again on the next call"
-                    if remaining <= 0
-                    else f"owner code rejected; {remaining} attempt(s) remaining"
+                    "Owner code required. A one-time code was delivered to the owner "
+                    f"via '{pending.get('delivery', {}).get('channel')}' — not to this client. "
+                    "Ask the owner for the code and call again with owner_code=<code>, "
+                    "or owner_biometric=true where Touch ID is enabled. "
+                    "The code is bound to this exact change."
                 ),
             }

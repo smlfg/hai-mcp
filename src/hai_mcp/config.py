@@ -35,6 +35,9 @@ DEFAULT_OWNER_NTFY_URL = "https://ntfy.sh"
 DEFAULT_OWNER_CODE_TTL_SECONDS = 600
 _OWNER_GATE_ALIASES = {"nonce": "nonce", "ack": "ack_legacy", "ack_legacy": "ack_legacy"}
 
+DEFAULT_OWNER_BIOMETRIC = "off"
+OWNER_BIOMETRIC_MODES = frozenset({"off", "tidcli"})
+
 
 @dataclass(frozen=True)
 class Config:
@@ -50,6 +53,8 @@ class Config:
     owner_ntfy_topic: str | None = None
     owner_ntfy_token: str | None = None
     owner_code_ttl_seconds: int = DEFAULT_OWNER_CODE_TTL_SECONDS
+    owner_biometric: str = DEFAULT_OWNER_BIOMETRIC
+    owner_biometric_bin: Path | None = None
     warnings: tuple[str, ...] = field(default_factory=tuple)
 
     @classmethod
@@ -85,6 +90,17 @@ class Config:
                     warnings.append(f"HAI_OWNER_CODE_TTL={ttl} too small; using 30")
                     ttl = 30
 
+        bio_raw = (
+            os.environ.get("HAI_OWNER_BIOMETRIC", DEFAULT_OWNER_BIOMETRIC).strip().lower()
+            or DEFAULT_OWNER_BIOMETRIC
+        )
+        if bio_raw not in OWNER_BIOMETRIC_MODES:
+            warnings.append(f"HAI_OWNER_BIOMETRIC={bio_raw!r} unknown; using 'off'")
+            bio_raw = DEFAULT_OWNER_BIOMETRIC
+
+        bio_bin_raw = os.environ.get("HAI_OWNER_BIOMETRIC_BIN", "").strip()
+        owner_biometric_bin = Path(bio_bin_raw).expanduser() if bio_bin_raw else None
+
         return cls(
             hai_home=home,
             owner_gate=gate,
@@ -94,6 +110,8 @@ class Config:
             owner_ntfy_topic=os.environ.get("HAI_OWNER_NTFY_TOPIC", "").strip() or None,
             owner_ntfy_token=os.environ.get("HAI_OWNER_NTFY_TOKEN", "").strip() or None,
             owner_code_ttl_seconds=ttl,
+            owner_biometric=bio_raw,
+            owner_biometric_bin=owner_biometric_bin,
             warnings=tuple(warnings),
         )
 

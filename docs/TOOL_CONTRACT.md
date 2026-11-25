@@ -1,4 +1,4 @@
-# TOOL_CONTRACT — HAI-MCP v0.1
+g# TOOL_CONTRACT — HAI-MCP v0.1
 
 ## Non-goals
 

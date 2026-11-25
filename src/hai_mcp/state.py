@@ -310,6 +310,7 @@ class ControlPlane:
         reason: str | None = None,
         content: str | None = None,
         owner_code: Any = None,
+        owner_biometric: Any = False,
     ) -> dict[str, Any]:
         reason_text = str(reason or "").strip()
 
@@ -366,12 +367,13 @@ class ControlPlane:
                 summary=f"Accept NEXT_STEP for {project.name}",
                 preview={"project_path": str(project), "next_step": body.strip()[:600]},
                 owner_code=owner_code,
+                owner_biometric=owner_biometric,
             )
             if not passed:
                 return gate_result
             gate_info = gate_result
             if not reason_text:
-                reason_text = f"owner code accepted ({gate_info['challenge_id']})"
+                reason_text = f"owner gate accepted ({gate_info['challenge_id']})"
 
         canonical = ad / "NEXT_STEP.md"
         history_dir = ad / "history"
@@ -566,6 +568,7 @@ class ControlPlane:
         owner_ack: Any = False,
         break_glass_marker: Any = False,
         owner_code: Any = None,
+        owner_biometric: Any = False,
     ) -> dict[str, Any]:
         return self.mission.recontract(
             mission_id=mission_id,
@@ -576,6 +579,7 @@ class ControlPlane:
             owner_ack=owner_ack,
             break_glass_marker=break_glass_marker,
             owner_code=owner_code,
+            owner_biometric=owner_biometric,
         )
 
     def close_mission(
@@ -588,6 +592,7 @@ class ControlPlane:
         owner_ack: Any = False,
         device_id: str | None = None,
         owner_code: Any = None,
+        owner_biometric: Any = False,
     ) -> dict[str, Any]:
         return self.mission.close_mission(
             mission_id=mission_id,
@@ -598,6 +603,7 @@ class ControlPlane:
             owner_ack=owner_ack,
             device_id=device_id,
             owner_code=owner_code,
+            owner_biometric=owner_biometric,
         )
 
     # --- Additional daily-loop flow surface (thin, over the hardened engine) ---

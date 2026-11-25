@@ -92,13 +92,14 @@ def hai_accept_next_step(
     reason: str | None = None,
     content: str | None = None,
     owner_ack: StrictBool = False,
+    owner_biometric: StrictBool = False,
 ) -> str:
     """Promote proposed (or provided) content to canonical NEXT_STEP.md — owner-gated.
 
     Default gate (nonce): call once WITHOUT owner_code; a one-time code is delivered to the
-    owner (never to this client). Ask the owner for it and call again with owner_code=<code>.
-    The code is bound to the exact content and is single-use. Legacy gate (ack_legacy):
-    owner_ack=true + reason.
+    owner (never to this client). Satisfy the gate with owner_code=<code> OR owner_biometric=true
+    (Touch ID via tidcli when HAI_OWNER_BIOMETRIC=tidcli). The challenge is bound to the exact
+    content and is single-use. Legacy gate (ack_legacy): owner_ack=true + reason.
     """
     return _json(
         get_control_plane().accept_next_step(
@@ -107,6 +108,7 @@ def hai_accept_next_step(
             reason=reason,
             content=content,
             owner_code=owner_code,
+            owner_biometric=owner_biometric,
         )
     )
 
@@ -262,11 +264,13 @@ def hai_recontract(
     mode: str = "normal",
     break_glass_marker: StrictBool = False,
     owner_code: str | None = None,
+    owner_biometric: StrictBool = False,
 ) -> str:
     """Apply a visible field-level contract diff; revokes all leases. Owner-gated.
 
     First call (no owner_code) returns the diff and delivers a one-time code to the owner;
-    call again with owner_code=<code from the owner>. Legacy gate: owner_ack=true.
+    satisfy with owner_code=<code> OR owner_biometric=true (tidcli when enabled).
+    Legacy gate: owner_ack=true.
     """
     return _json(
         get_control_plane().recontract(
@@ -278,6 +282,7 @@ def hai_recontract(
             owner_ack=owner_ack,
             break_glass_marker=break_glass_marker,
             owner_code=owner_code,
+            owner_biometric=owner_biometric,
         )
     )
 
@@ -292,11 +297,12 @@ def hai_close_mission(
     owner_ack: StrictBool = False,
     device_id: str | None = None,
     owner_code: str | None = None,
+    owner_biometric: StrictBool = False,
 ) -> str:
     """Complete with verified per-criterion evidence, or abandon (owner-gated).
 
-    Abandon: first call delivers a one-time code to the owner; call again with owner_code.
-    Legacy gate: owner_ack=true.
+    Abandon: first call delivers a one-time code to the owner; satisfy with owner_code OR
+    owner_biometric=true (tidcli when enabled). Legacy gate: owner_ack=true.
     """
     return _json(
         get_control_plane().close_mission(
@@ -308,6 +314,7 @@ def hai_close_mission(
             owner_ack=owner_ack,
             device_id=device_id,
             owner_code=owner_code,
+            owner_biometric=owner_biometric,
         )
     )
 

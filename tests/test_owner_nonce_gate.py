@@ -306,6 +306,7 @@ def test_health_reports_the_gate_and_never_touches_owner_home_by_itself(plane: C
     assert health["owner_gate"]["mode"] == "nonce"
     assert health["owner_gate"]["channel"] == "file"
     assert health["owner_gate"]["owner_home"] == str(plane.cfg.resolved_owner_home())
+    assert health["owner_gate"]["biometric"] == {"mode": "off", "available": False}
     assert not plane.cfg.resolved_owner_home().exists()  # created only on first delivery
 
 
