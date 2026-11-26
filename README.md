@@ -394,3 +394,9 @@ HAI-MCP is one piece of Samuel Fleig's HAI stack. It stands on:
 
 > *Canonical HAI site:* <https://www.human-agent-interface.com/> ·
 > *About Samuel Fleig:* <https://www.human-agent-interface.com/samuel/>
+
+### Official HAI skills
+
+`hai_health` advertises the [official HAI Skills Registry](https://github.com/smlfg/HAI-skills-registry) and its [human-facing library](https://smlfg.github.io/HAI-skills-registry/). MCP clients supporting resources can read `hai://skills/index` for the current registry README, including skill descriptions. For an index link `skills/<category>/<name>/SKILL.md`, read `hai://skills/<category>/<name>` to retrieve the original instructions. Resource reads require network access to `raw.githubusercontent.com`; failures are reported for that read only. The health check itself does not access the network. Clients without MCP resource support can use the registry links directly.
+
+Discovery does not establish network accessibility, local installation, or activation by a particular agent. HAI-MCP does not install or activate skills; use the registry's own installation instructions if desired.

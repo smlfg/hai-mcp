@@ -14,6 +14,7 @@ from hai_mcp.boundary import strict_optional_time_limit_hours
 from hai_mcp.config import Config, SERVER_NAME
 from hai_mcp.http_transport import http_bind_allowed, http_token_from_env, wrap_with_bearer_token
 from hai_mcp.state import ControlPlane
+from hai_mcp.skill_registry import read_index, read_skill, registry_info
 
 # The boundary deliberately refuses coercion (see boundary.py): a string "2" must be
 # rejected, never silently become 2. Bare `Any` however advertises a schema with no type
@@ -53,10 +54,25 @@ def hai_health(
     """Check HAI-MCP server health and optional project path usability without model calls.
 
     Use this when you need version, hai_home writability, owner-gate mode, or configuration
-    warnings; use hai_status instead to inspect ACTIVE lanes, focus, inbox count, and
+    warnings and official skill registry discovery; use hai_status instead to inspect ACTIVE lanes, focus, inbox count, and
     next-step flags. Read-only. Returns JSON with ok and health fields.
     """
-    return _json(get_control_plane().health(project_path))
+    result = get_control_plane().health(project_path)
+    if result.get("ok"):
+        result["skill_registry"] = registry_info()
+    return _json(result)
+
+
+@mcp.resource("hai://skills/index", mime_type="text/markdown")
+async def official_skill_index() -> str:
+    """Read the official registry index and its skill purposes (requires network)."""
+    return await anyio.to_thread.run_sync(read_index)
+
+
+@mcp.resource("hai://skills/{category}/{name}", mime_type="text/markdown")
+async def official_skill(category: str, name: str) -> str:
+    """Read a skill's canonical SKILL.md using its category and name (requires network)."""
+    return await anyio.to_thread.run_sync(read_skill, category, name)
 
 
 @mcp.tool(
