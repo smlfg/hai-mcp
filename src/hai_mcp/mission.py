@@ -47,10 +47,19 @@ RECONTRACT_SYSTEM_FIELDS = frozenset(
     }
 )
 VALID_RECONTRACT_MODES = frozenset({"normal", "blocker", "break_glass"})
+REBINDABLE_REVOKE_REASON = "recontract"  # only a contract change may be healed by a rebind
 
 
 def _utc_now() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def _as_int(value: Any, default: int) -> int:
+    """Read an int defensively; a broken stored value never crashes the answer path."""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
 
 
 def _new_id(prefix: str) -> str:
@@ -750,6 +759,305 @@ class MissionEngine:
 
         return True, "", ""
 
+    def _contract_scope(self, contract: dict[str, Any]) -> tuple[list[str], set[str]]:
+        """Criterion ids and allowed capabilities a contract version still grants."""
+        criteria = [
+            str(c.get("id"))
+            for c in contract.get("done_criteria", [])
+            if isinstance(c, dict)
+        ]
+        allowed_caps = {
+            str(c)
+            for c in contract.get("constraints", {}).get("capabilities", [])
+            if str(c)
+        }
+        return criteria, allowed_caps
+
+    def _rebind_plan(self, session: dict[str, Any], contract: dict[str, Any]) -> dict[str, Any]:
+        """Compare a lease against a contract version: what still holds, what does not."""
+        valid_ids, allowed_caps = self._contract_scope(contract)
+        session_crits = [str(c) for c in session.get("criterion_ids", [])]
+        surviving = [c for c in session_crits if c in valid_ids]
+        lost = [c for c in session_crits if c not in valid_ids]
+        # An empty capability list means "all capabilities the contract allows" (see authorize_session).
+        raw_caps = [str(c) for c in session.get("capabilities", [])]
+        session_caps = raw_caps or sorted(allowed_caps)
+        kept_caps = [c for c in session_caps if c in allowed_caps]
+        dropped_caps = [c for c in session_caps if c not in allowed_caps]
+        return {
+            "valid_criterion_ids": valid_ids,
+            "session_criterion_ids": session_crits,
+            "surviving_criterion_ids": surviving,
+            "lost_criterion_ids": lost,
+            "kept_capabilities": kept_caps,
+            "dropped_capabilities": dropped_caps,
+            "rebindable": bool(surviving) and not lost and bool(kept_caps),
+        }
+
+    def _stale_contract_guidance(
+        self,
+        session: dict[str, Any],
+        contract: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """The named next step for a lease that a contract update left behind."""
+        mission_id = str(session.get("mission_id", ""))
+        session_id = str(session.get("session_id", ""))
+        meta = self.load_mission_meta(mission_id) or {}
+        current_version = _as_int(meta.get("current_version"), 0)
+        current = contract if contract is not None else self.current_contract(mission_id)
+        plan = self._rebind_plan(session, current or {})
+        revoked_for = str(session.get("revoke_reason") or "")
+        rebindable = bool(plan["rebindable"]) and revoked_for in ("", REBINDABLE_REVOKE_REASON)
+        if rebindable:
+            next_action = (
+                f"call hai_rebind_session(mission_id={mission_id}, session_id={session_id}, "
+                f"contract_version={current_version}) "
+                "to rebind this lease to the current contract version"
+            )
+        else:
+            surviving = plan["surviving_criterion_ids"] or plan["valid_criterion_ids"]
+            next_action = (
+                f"call hai_authorize_session(mission_id={mission_id}, contract_version={current_version}, "
+                f"criterion_ids={surviving}) to obtain a new lease for the current contract version"
+            )
+        return {
+            "session_contract_version": _as_int(session.get("contract_version"), -1),
+            "current_version": current_version,
+            "session_status": str(session.get("status", "")),
+            "revoke_reason": revoked_for or None,
+            "valid_criterion_ids": plan["valid_criterion_ids"],
+            "session_criterion_ids": plan["session_criterion_ids"],
+            "surviving_criterion_ids": plan["surviving_criterion_ids"],
+            "lost_criterion_ids": plan["lost_criterion_ids"],
+            "rebindable": rebindable,
+            "next_action": next_action,
+        }
+
+    def rebind_session(
+        self,
+        mission_id: str,
+        contract_version: Any,
+        session_id: str,
+        criterion_ids: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """Rebind a stale lease to the current contract version.
+
+        Fail-closed: the rebind never widens the lease. It keeps the original deadline,
+        only the criteria and capabilities that still exist in the current contract survive,
+        and only a lease that a contract change invalidated may be rebound.
+        """
+        err = self._reject_mission_id(mission_id)
+        if err:
+            return err
+        err = self._reject_session_id(session_id)
+        if err:
+            return err
+
+        version, ver_err = strict_int(contract_version, "contract_version", min_value=1)
+        if ver_err:
+            return ver_err
+        assert version is not None
+
+        with mission_state_lock(self.cfg.hai_home):
+            session = self.get_session(session_id)
+            if not session:
+                return {
+                    "ok": False,
+                    "error": "invalid_args",
+                    "message": f"session not found: {session_id}",
+                    "next_action": "call hai_status to see the active mission and its sessions",
+                }
+            if str(session.get("mission_id", "")) != mission_id:
+                return {
+                    "ok": False,
+                    "error": "invalid_args",
+                    "message": f"session {session_id} does not belong to mission {mission_id}",
+                }
+
+            meta = self.load_mission_meta(mission_id)
+            if not meta or meta.get("status") != "active":
+                return {
+                    "ok": False,
+                    "error": "mission_not_active",
+                    "message": f"mission not active: {mission_id}",
+                }
+
+            current_version = _as_int(meta.get("current_version"), 0)
+            if current_version != version:
+                return {
+                    "ok": False,
+                    "error": "contract_version_mismatch",
+                    "message": (
+                        f"requested contract version {version} is stale; "
+                        f"current version is {current_version}"
+                    ),
+                    "current_version": current_version,
+                    "session_contract_version": _as_int(session.get("contract_version"), -1),
+                    "next_action": (
+                        f"call hai_rebind_session(mission_id={mission_id}, session_id={session_id}, "
+                        f"contract_version={current_version})"
+                    ),
+                }
+
+            contract = self.load_contract(mission_id, current_version)
+            if not contract:
+                return {
+                    "ok": False,
+                    "error": "contract_version_mismatch",
+                    "message": f"contract version {current_version} not found",
+                    "current_version": current_version,
+                }
+
+            session_version = _as_int(session.get("contract_version"), -1)
+            guidance = self._stale_contract_guidance(session, contract)
+
+            if session_version == current_version and session.get("status") == "active":
+                return {
+                    "ok": True,
+                    "status": "already_bound",
+                    "session_id": session_id,
+                    "mission_id": mission_id,
+                    "contract_version": current_version,
+                    "contract_hash": contract.get("contract_hash"),
+                    "session_lease": session,
+                    "message": "session is already bound to the current contract version",
+                }
+
+            if session.get("status") != "active":
+                revoked_for = str(session.get("revoke_reason") or "")
+                if revoked_for != REBINDABLE_REVOKE_REASON:
+                    return {
+                        "ok": False,
+                        "error": "session_not_rebindable",
+                        "detail": "lease_revoked",
+                        "message": (
+                            f"session lease was revoked ({revoked_for or 'unknown'}); only a contract "
+                            "change can be healed by a rebind"
+                        ),
+                        **guidance,
+                    }
+
+            expires_at = session.get("expires_at")
+            if expires_at and _utc_now() > str(expires_at):
+                return {
+                    "ok": False,
+                    "error": "lease_expired",
+                    "message": "session lease has expired; a rebind does not extend the deadline",
+                    **guidance,
+                }
+
+            plan = self._rebind_plan(session, contract)
+            requested = [str(c).strip() for c in (criterion_ids or []) if str(c).strip()]
+            if requested:
+                not_original = [c for c in requested if c not in plan["session_criterion_ids"]]
+                if not_original:
+                    return {
+                        "ok": False,
+                        "error": "invalid_args",
+                        "message": (
+                            "criterion_ids must be a subset of the session's original criteria; "
+                            "not original: " + ", ".join(not_original)
+                        ),
+                        "session_criterion_ids": plan["session_criterion_ids"],
+                    }
+                removed = [c for c in requested if c not in plan["valid_criterion_ids"]]
+                if removed:
+                    return {
+                        "ok": False,
+                        "error": "session_not_rebindable",
+                        "detail": "criteria_removed",
+                        "message": (
+                            "criteria no longer exist in the current contract: " + ", ".join(removed)
+                        ),
+                        **guidance,
+                    }
+                target_crits = requested
+            else:
+                if plan["lost_criterion_ids"]:
+                    return {
+                        "ok": False,
+                        "error": "session_not_rebindable",
+                        "detail": "criteria_removed",
+                        "message": (
+                            "session criteria no longer exist in the current contract: "
+                            + ", ".join(plan["lost_criterion_ids"])
+                        ),
+                        **guidance,
+                    }
+                target_crits = list(plan["session_criterion_ids"])
+
+            if not plan["kept_capabilities"]:
+                return {
+                    "ok": False,
+                    "error": "session_not_rebindable",
+                    "detail": "capabilities_removed",
+                    "message": (
+                        "no granted capability of the session is still allowed by the current contract"
+                    ),
+                    **guidance,
+                }
+
+            # A rebind restores a lease; it must not exceed the mission's parallel capacity.
+            max_parallel = int(contract.get("constraints", {}).get("max_parallel_sessions", 1))
+            valid_now = 0
+            for other in self.list_sessions(mission_id):
+                if str(other.get("session_id", "")) == session_id:
+                    continue
+                if other.get("status") != "active":
+                    continue
+                ok, _, _ = self._session_valid(other, contract)
+                if ok:
+                    valid_now += 1
+            if valid_now >= max_parallel:
+                return {
+                    "ok": False,
+                    "error": "parallel_session_denied",
+                    "message": f"max_parallel_sessions={max_parallel} already reached",
+                    "clause": "constraints.max_parallel_sessions",
+                    **guidance,
+                }
+
+            session["contract_version"] = current_version
+            session["contract_hash"] = contract["contract_hash"]
+            session["criterion_ids"] = target_crits
+            session["capabilities"] = plan["kept_capabilities"]
+            session["status"] = "active"
+            session.pop("revoked_at", None)
+            session.pop("revoke_reason", None)
+            session["rebound_at"] = _utc_now()
+            session["rebound_from_version"] = session_version
+            self.save_session(session)
+
+        audit = self.append_audit(
+            "session_contract_rebound",
+            {
+                "mission_id": mission_id,
+                "session_id": session_id,
+                "old_version": session_version,
+                "new_version": current_version,
+                "contract_hash": contract.get("contract_hash"),
+                "criterion_ids": target_crits,
+                "dropped_capabilities": plan["dropped_capabilities"],
+                "expires_at": session.get("expires_at"),
+            },
+        )
+        return {
+            "ok": True,
+            "status": "rebound",
+            "session_id": session_id,
+            "mission_id": mission_id,
+            "contract_version": current_version,
+            "contract_hash": contract.get("contract_hash"),
+            "session_lease": session,
+            "criterion_ids": target_crits,
+            "dropped_capabilities": plan["dropped_capabilities"],
+            "audit_event_id": audit["event_id"],
+            "message": (
+                "lease rebound to the current contract version; scope narrowed to the criteria and "
+                "capabilities that still exist; the original deadline is unchanged"
+            ),
+        }
+
     def authorize_session(
         self,
         mission_id: str,
@@ -814,12 +1122,24 @@ class MissionEngine:
                     "message": f"contract version {version} not found",
                 }
             if int(meta["current_version"]) != version:
+                current_contract = self.load_contract(mission_id, int(meta["current_version"])) or {}
+                valid_ids = [
+                    str(c.get("id"))
+                    for c in current_contract.get("done_criteria", [])
+                    if isinstance(c, dict)
+                ]
                 return {
                     "ok": False,
                     "status": "denied",
                     "error": "contract_version_mismatch",
                     "message": "requested contract version is stale",
                     "current_version": meta["current_version"],
+                    "valid_criterion_ids": valid_ids,
+                    "next_action": (
+                        f"call hai_authorize_session(mission_id={mission_id}, "
+                        f"contract_version={meta['current_version']}, criterion_ids={valid_ids}) "
+                        "to bind a lease to the current contract version"
+                    ),
                 }
 
             crit_ids = [str(c).strip() for c in (criterion_ids or []) if str(c).strip()]
@@ -970,12 +1290,19 @@ class MissionEngine:
 
         ok, code, message = self._session_valid(session, contract)
         if not ok:
-            return {
+            payload: dict[str, Any] = {
                 "ok": False,
                 "error": code,
                 "message": message,
                 "required_action": "pause",
             }
+            if code in ("contract_version_mismatch", "lease_revoked"):
+                # Name the step that moves this lease forward instead of a bare "stale".
+                guidance = self._stale_contract_guidance(session, contract)
+                payload.update(guidance)
+                if guidance["rebindable"]:
+                    payload["required_action"] = "rebind_session"
+            return payload
 
         remaining_seconds = 0
         expires_at = session.get("expires_at")
@@ -1087,13 +1414,20 @@ class MissionEngine:
 
         ok, code, message = self._session_valid(session, contract)
         if not ok:
-            return {
+            payload: dict[str, Any] = {
                 "ok": False,
                 "error": code,
                 "message": message,
                 "classification": "unclear",
                 "required_action": "pause",
             }
+            if code in ("contract_version_mismatch", "lease_revoked"):
+                # Name the step that moves this lease forward instead of a bare "stale".
+                guidance = self._stale_contract_guidance(session, contract)
+                payload.update(guidance)
+                if guidance["rebindable"]:
+                    payload["required_action"] = "rebind_session"
+            return payload
 
         step = str(activity_step or "").strip()
         crit_id = str(criterion_id or "").strip()
@@ -1451,6 +1785,7 @@ class MissionEngine:
                     "current_version": meta["current_version"],
                 }
 
+            stale_sessions = [s for s in self.list_sessions(mission_id) if s.get("status") == "active"]
             revoked = self.revoke_all_sessions(mission_id, reason="recontract")
 
             new_version = int(meta["current_version"]) + 1
@@ -1467,6 +1802,15 @@ class MissionEngine:
             meta["current_version"] = new_version
             write_json(self.mission_dir(mission_id) / "mission.json", meta)
 
+            # Which of the revoked leases still fit the new contract? Those can be rebound.
+            rebindable_sessions: list[str] = []
+            not_rebindable_sessions: list[str] = []
+            for stale in stale_sessions:
+                if self._rebind_plan(stale, new_contract)["rebindable"]:
+                    rebindable_sessions.append(str(stale.get("session_id", "")))
+                else:
+                    not_rebindable_sessions.append(str(stale.get("session_id", "")))
+
         audit_payload = {
             "mission_id": mission_id,
             "old_version": version,
@@ -1475,6 +1819,7 @@ class MissionEngine:
             "mode": mode,
             "reason": reason,
             "revoked_sessions": revoked,
+            "rebindable_sessions": rebindable_sessions,
             "owner_gate": gate_info,
         }
         if mode == "break_glass":
@@ -1490,6 +1835,16 @@ class MissionEngine:
             "diff": diff,
             "contract": new_contract,
             "revoked_sessions": revoked,
+            "session_migration": {
+                "revoked_sessions": revoked,
+                "rebindable_sessions": rebindable_sessions,
+                "not_rebindable_sessions": not_rebindable_sessions,
+                "next_action": (
+                    f"call hai_rebind_session(mission_id={mission_id}, session_id=<session_id>, "
+                    f"contract_version={new_version}) for every session in rebindable_sessions; the "
+                    "other sessions need a new lease via hai_authorize_session"
+                ),
+            },
             "audit_event_id": audit["event_id"],
             "audit_classification": audit_payload.get("audit_classification"),
             "owner_gate": gate_info,

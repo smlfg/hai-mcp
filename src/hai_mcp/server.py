@@ -432,6 +432,50 @@ def hai_get_contract(
 
 @mcp.tool(
     annotations=ToolAnnotations(
+        readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=False
+    )
+)
+def hai_rebind_session(
+    mission_id: Annotated[
+        str, Field(description="Active mission whose current contract version the lease is bound to.")
+    ],
+    contract_version: Annotated[
+        StrictInt,
+        Field(description="Current contract version the lease is rebound to; must equal the mission's current version."),
+    ],
+    session_id: Annotated[
+        str, Field(description="Stale session lease id returned by hai_authorize_session.")
+    ],
+    criterion_ids: Annotated[
+        list[str] | None,
+        Field(
+            description=(
+                "Optional narrower criterion set; must be a subset of the session's own criteria "
+                "that still exists in the current contract."
+            )
+        ),
+    ] = None,
+) -> str:
+    """Rebind a stale session lease to the current contract version, keeping its scope and deadline.
+
+    Use this when a contract update (hai_recontract) made your lease stale and your criteria
+    still exist in the new contract; use hai_authorize_session instead when you want a fresh
+    lease with a new deadline. Fails closed when the criteria or capabilities no longer exist,
+    when the lease expired, or when the mission is no longer active. Returns JSON with ok and
+    the rebound lease.
+    """
+    return _json(
+        get_control_plane().rebind_session(
+            mission_id=mission_id,
+            contract_version=contract_version,
+            session_id=session_id,
+            criterion_ids=criterion_ids,
+        )
+    )
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
         readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False
     )
 )

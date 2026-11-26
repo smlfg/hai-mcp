@@ -529,6 +529,20 @@ class ControlPlane:
     def get_contract(self, session_id: str) -> dict[str, Any]:
         return self.mission.get_contract(session_id)
 
+    def rebind_session(
+        self,
+        mission_id: str,
+        contract_version: Any,
+        session_id: str,
+        criterion_ids: list[str] | None = None,
+    ) -> dict[str, Any]:
+        return self.mission.rebind_session(
+            mission_id=mission_id,
+            contract_version=contract_version,
+            session_id=session_id,
+            criterion_ids=criterion_ids,
+        )
+
     def check_activity(
         self,
         session_id: str,
