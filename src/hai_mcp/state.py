@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from hai_mcp.boundary import strict_int
+from hai_mcp.build_info import describe_build
 from hai_mcp.config import Config, ensure_hai_home
 from hai_mcp.ids import validate_intake_id
 from hai_mcp.locking import mission_state_lock
@@ -97,6 +98,7 @@ class ControlPlane:
             "semantic_verification": False,
             "projects": ProjectStore(home).list_projects(),
             "owner_gate": self.mission.owner_gate.describe(),
+            "build": describe_build(),
         }
         if self.cfg.warnings:
             result["config_warnings"] = list(self.cfg.warnings)
