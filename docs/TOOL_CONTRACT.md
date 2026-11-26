@@ -25,6 +25,7 @@
 | `hai_bind_project` | mount table | **owner_ack=true + reason** |
 | `hai_authorize_session` | session lease | active mission; current contract version; capacity |
 | `hai_get_contract` | no | valid non-expired session lease |
+| `hai_rebind_session` | session lease bound to the current contract version | active mission; requested version = current version; lease exists and was invalidated by a contract change (not by a day stop, completion or abandonment); its criteria and capabilities still exist in the current contract; lease not expired; parallel capacity free. No owner gate: the target contract version is already owner-approved, and the rebind never widens the scope nor extends the deadline |
 | `hai_check_activity` | audit only | valid session lease |
 | `hai_park_item` | parking record | rationale required; no execution right |
 | `hai_recontract` | new contract version + lease revocation | **owner gate**: one-time code or Touch ID, bound to the diff (`ack_legacy`: owner_ack=true); reason required; break_glass needs marker |
@@ -56,6 +57,7 @@ Derived from the `Mutates` column; `openWorldHint` is `false` for every tool. `i
 | `hai_bind_project` | no | no | yes |
 | `hai_authorize_session` | no | no | no |
 | `hai_get_contract` | yes | no | yes |
+| `hai_rebind_session` | no | no | yes |
 | `hai_check_activity` | no | no | no |
 | `hai_park_item` | no | no | no |
 | `hai_recontract` | no | yes | no |
@@ -105,6 +107,7 @@ Structured JSON in tool result with `ok: false` and `error` code:
 - `contract_version_mismatch`
 - `lease_expired`
 - `lease_revoked`
+- `session_not_rebindable` (the lease cannot be moved to the current contract version) carries `detail`: `criteria_removed`, `capabilities_removed`, `lease_revoked`
 - `review_required`
 - `parallel_session_denied`
 - `device_mount_required`
@@ -116,6 +119,25 @@ Structured JSON in tool result with `ok: false` and `error` code:
 ## Transport note
 
 Optional `streamable-http` transport is trusted-localhost or bearer-token gated (`HAI_HTTP_TOKEN`); it is not adversarial owner authentication.
+
+## Contract update → session rebind
+
+A recontract (owner-gated) writes a new contract version and revokes the leases bound to the old
+version. The old lease is never silently dead end:
+
+- Every stale-contract answer (`hai_get_contract`, `hai_check_activity`, `hai_authorize_session`)
+  carries `current_version`, `session_contract_version`, the surviving criterion ids, `rebindable`
+  and a `next_action` that names the call to make. When the lease can be rebound, `required_action`
+  is `rebind_session` instead of the usual `pause`.
+- `hai_rebind_session` moves an existing lease onto the current contract version: same session id,
+  same agent identity, same deadline, same criteria and capabilities — narrowed to what still
+  exists in the new contract. It fails closed (no scope growth, no deadline extension) and is
+  refused when the criteria or capabilities were removed, when the lease expired, when the lease
+  was revoked for another reason, or when the parallel capacity is full.
+- If the lease cannot be rebound, the answer names `hai_authorize_session` with the current version
+  as the way to obtain a fresh lease (new session id, new deadline).
+- `hai_recontract` reports `session_migration` with the revoked sessions and the subset that can
+  be rebound.
 
 ## Session / close device fields
 

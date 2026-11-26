@@ -57,7 +57,7 @@ human. Concretely, an MCP control-plane:
 | Concern | What HAI-MCP exposes for it |
 |---|---|
 | **Mission contract** | `hai_open_mission`, `hai_get_contract`, `hai_recontract` |
-| **Session leasing** | `hai_authorize_session` — time-bounded, contract-versioned |
+| **Session leasing** | `hai_authorize_session` — time-bounded, contract-versioned; `hai_rebind_session` — moves a stale lease onto the current contract version |
 | **Activity classification** | `hai_check_activity` / `hai_drift_check` — on-contract vs. off-contract |
 | **Focus & lanes** | `hai_set_focus`, `hai_status` — at most 2 ACTIVE lanes |
 | **Owner gate** | one-time nonces out-of-band (`HAI_OWNER_HOME` or ntfy), or Touch ID on macOS, for `accept` / `recontract` / `abandon` |
@@ -73,7 +73,7 @@ judge — agents call it to ask *"may I?"* and to record *"I did"*.
 
 ## Features
 
-- **One state engine, 23 tools** — three surfaces (legacy control plane,
+- **One state engine, 25 tools** — three surfaces (legacy control plane,
   mission lifecycle, daily-loop wrappers) sharing one hardened core.
 - **Strict fail-closed boundary** — inputs are typed and rejected, not
   coerced. A `String "2"` is refused for an `Integer` field; the server
@@ -81,6 +81,11 @@ judge — agents call it to ask *"may I?"* and to record *"I did"*.
 - **Versioned mission contracts** — every mission has a contract with a
   monotonic version. Recontracting produces a visible field-level diff and
   revokes every existing lease.
+- **No dead-end leases** — a lease that a contract update left behind names
+  the way forward in the error itself: `hai_rebind_session` moves it onto the
+  new version when its criteria still exist (same lease, same deadline,
+  narrowed scope), and `hai_authorize_session` is named when a fresh lease is
+  the honest answer.
 - **Time-bounded session leases** — `hai_authorize_session` binds a lease to
   a mission id, a contract version, a duration, a role, a contribution, and
   a claimed criterion set.
@@ -104,7 +109,7 @@ judge — agents call it to ask *"may I?"* and to record *"I did"*.
   bearer-token binding (loopback only by default).
 - **Checkpoint & recover** — `hai_checkpoint` snapshots context; `hai_recover`
   returns the smallest recovery next action.
-- **203 tests green** — the engine is covered; the slice remains open
+- **229 tests green** — the engine is covered; the slice remains open
   for the learning-budget and owner-instrument follow-ups.
 
 ---
@@ -137,7 +142,7 @@ uv run hai-mcp
 
 ## Sample usage — wiring the server into a client
 
-The server is **transport-agnostic**; every MCP client gets the same 23
+The server is **transport-agnostic**; every MCP client gets the same 25
 tools. Drop the snippet into the client's MCP config and restart.
 
 ### Claude Code / Claude Desktop
@@ -235,6 +240,29 @@ hai_authorize_session(
   harness_id         = "codex-cli/0.45",
 )
 ```
+
+### 2b. Contract update → rebind the lease
+
+A contract update (`hai_recontract`) bumps the contract version and revokes the
+leases bound to the old one. The server never leaves you guessing:
+
+```text
+hai_get_contract(session_id = "<from lease>")
+# → {"ok": false, "error": "contract_version_mismatch",
+#    "current_version": 10, "rebindable": true,
+#    "next_action": "call hai_rebind_session(session_id=S-…, contract_version=10) …"}
+
+hai_rebind_session(
+  mission_id       = "<from open>",
+  contract_version = 10,
+  session_id       = "<from lease>",
+)
+# → same session id, same deadline, scope narrowed to what still exists
+```
+
+If a criterion was removed in the meantime, the rebind is refused and the
+answer names `hai_authorize_session` with the current version — a fresh lease
+with a new deadline — as the honest way forward.
 
 ### 3. Check an activity before running it
 
