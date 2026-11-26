@@ -48,6 +48,13 @@ RECONTRACT_SYSTEM_FIELDS = frozenset(
 )
 VALID_RECONTRACT_MODES = frozenset({"normal", "blocker", "break_glass"})
 
+# What a session waits for. "none" means: nothing blocks this session right now.
+WAITING_CAPACITY = "capacity"
+WAITING_OWNER = "owner_touchid"
+WAITING_CONTRACT = "contract"
+WAITING_NONE = "none"
+WAITING_REASONS = frozenset({WAITING_CAPACITY, WAITING_OWNER, WAITING_CONTRACT, WAITING_NONE})
+
 
 def _utc_now() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
@@ -290,14 +297,162 @@ class MissionEngine:
 
     def revoke_all_sessions(self, mission_id: str, reason: str) -> list[str]:
         revoked: list[str] = []
+        # A recontract kills the lease because the contract moved on: that session
+        # waits for the new contract. Every other end (completed, abandoned, day
+        # stopped) leaves nothing to wait for.
+        waiting_for = WAITING_CONTRACT if reason == "recontract" else WAITING_NONE
         for session in self.list_sessions(mission_id):
             if session.get("status") == "active":
                 session["status"] = "revoked"
                 session["revoked_at"] = _utc_now()
                 session["revoke_reason"] = reason
+                session["waiting_for"] = waiting_for
                 self.save_session(session)
                 revoked.append(session["session_id"])
         return revoked
+
+    # ----- what a session waits for -------------------------------------------
+
+    def waiting_path(self, mission_id: str) -> Path:
+        path = self.mission_dir(mission_id) / "waiting.json"
+        assert_under(path, self.missions_dir)  # reject a symlinked file escaping HAI_HOME
+        return path
+
+    def load_waiting(self, mission_id: str) -> list[dict[str, Any]]:
+        """Agents whose session request waits for something — one entry per agent."""
+        data = read_json(self.waiting_path(mission_id), {"waiting": []})
+        entries = data.get("waiting") if isinstance(data, dict) else None
+        if not isinstance(entries, list):
+            return []
+        return [entry for entry in entries if isinstance(entry, dict)]
+
+    def record_waiting(
+        self,
+        mission_id: str,
+        agent_identity: str,
+        waiting_for: str,
+        reason: str,
+        **extra: Any,
+    ) -> dict[str, Any]:
+        """Remember that one agent waits for something. One entry per agent + mission."""
+        if waiting_for not in WAITING_REASONS or waiting_for == WAITING_NONE:
+            raise ValueError(f"invalid waiting_for: {waiting_for}")
+        agent = str(agent_identity or "").strip()
+        now = _utc_now()
+        with mission_state_lock(self.cfg.hai_home):
+            entries = self.load_waiting(mission_id)
+            existing = next((e for e in entries if e.get("agent_identity") == agent), None)
+            entry: dict[str, Any] = dict(existing) if existing else {
+                "mission_id": mission_id,
+                "agent_identity": agent,
+                "since": now,
+            }
+            entry["waiting_for"] = waiting_for
+            entry["reason"] = reason
+            entry["updated_at"] = now
+            entry.update({k: v for k, v in extra.items() if v is not None})
+            kept = [e for e in entries if e.get("agent_identity") != agent]
+            kept.append(entry)
+            write_json(self.waiting_path(mission_id), {"version": 1, "waiting": kept})
+        return entry
+
+    def clear_waiting(self, mission_id: str, agent_identity: str) -> None:
+        """The agent got what it asked for — it waits for nothing anymore."""
+        agent = str(agent_identity or "").strip()
+        with mission_state_lock(self.cfg.hai_home):
+            entries = self.load_waiting(mission_id)
+            kept = [e for e in entries if e.get("agent_identity") != agent]
+            if len(kept) == len(entries):
+                return
+            write_json(self.waiting_path(mission_id), {"version": 1, "waiting": kept})
+
+    def clear_waiting_for_mission(self, mission_id: str) -> None:
+        """The mission is over: no agent waits for anything anymore."""
+        with mission_state_lock(self.cfg.hai_home):
+            write_json(self.waiting_path(mission_id), {"version": 1, "waiting": []})
+
+    def owner_pending(self, mission_id: str) -> list[dict[str, Any]]:
+        """Owner decisions that are still outstanding for this mission."""
+        try:
+            return self.owner_gate.pending_for_mission(mission_id)
+        except (OSError, ValueError):
+            return []
+
+    def session_waiting_for(
+        self,
+        session: dict[str, Any],
+        *,
+        owner_pending: bool | None = None,
+    ) -> str:
+        """Why one session waits — derived from stored state, never guessed.
+
+        A pending owner decision outranks everything else: the human must act.
+        Otherwise the stored reason (the contract moved on) is reported.
+        """
+        if owner_pending is None:
+            owner_pending = bool(self.owner_pending(str(session.get("mission_id", ""))))
+        if owner_pending:
+            return WAITING_OWNER
+        stored = str(session.get("waiting_for", WAITING_NONE))
+        if stored in WAITING_REASONS and stored != WAITING_NONE:
+            return stored
+        return WAITING_NONE
+
+    def mission_board(self, mission_id: str) -> dict[str, Any]:
+        """The mission board: every session of one mission and what it waits for."""
+        try:
+            meta = self.load_mission_meta(mission_id)
+        except IdentifierError as exc:
+            return {"ok": False, "error": exc.code, "message": exc.message}
+        if not meta:
+            return {
+                "ok": False,
+                "error": "mission_not_found",
+                "message": f"mission not found: {mission_id}",
+            }
+        pending = self.owner_pending(mission_id)
+        owner_waiting = bool(pending)
+        sessions = [
+            {
+                "session_id": session.get("session_id"),
+                "agent_identity": session.get("agent_identity"),
+                "harness_id": session.get("harness_id"),
+                "role": session.get("role"),
+                "status": session.get("status"),
+                "contract_version": session.get("contract_version"),
+                "expires_at": session.get("expires_at"),
+                "waiting_for": self.session_waiting_for(session, owner_pending=owner_waiting),
+            }
+            for session in self.list_sessions(mission_id)
+        ]
+        waiting = [
+            {
+                "agent_identity": entry.get("agent_identity"),
+                "waiting_for": entry.get("waiting_for"),
+                "reason": entry.get("reason"),
+                "since": entry.get("since"),
+            }
+            for entry in self.load_waiting(mission_id)
+        ]
+        return {
+            "ok": True,
+            "mission_id": mission_id,
+            "mission_status": meta.get("status"),
+            "contract_version": meta.get("current_version"),
+            "sessions": sessions,
+            "session_count": len(sessions),
+            "waiting": waiting,
+            "waiting_count": len(waiting),
+            "owner_pending": [
+                {
+                    "action": challenge.get("action"),
+                    "status": challenge.get("status"),
+                    "channel": (challenge.get("delivery") or {}).get("channel"),
+                    "expires_at": challenge.get("expires_at"),
+                }
+                for challenge in pending
+            ],
+        }
 
     def _validate_open_payload(
         self,
@@ -808,18 +963,32 @@ class MissionEngine:
 
             contract = self.load_contract(mission_id, version)
             if not contract:
+                self.record_waiting(
+                    mission_id,
+                    agent_identity,
+                    WAITING_CONTRACT,
+                    f"contract version {version} does not exist",
+                )
                 return {
                     "ok": False,
                     "error": "contract_version_mismatch",
                     "message": f"contract version {version} not found",
+                    "waiting_for": WAITING_CONTRACT,
                 }
             if int(meta["current_version"]) != version:
+                self.record_waiting(
+                    mission_id,
+                    agent_identity,
+                    WAITING_CONTRACT,
+                    f"requested contract v{version} is stale; current is v{meta['current_version']}",
+                )
                 return {
                     "ok": False,
                     "status": "denied",
                     "error": "contract_version_mismatch",
                     "message": "requested contract version is stale",
                     "current_version": meta["current_version"],
+                    "waiting_for": WAITING_CONTRACT,
                 }
 
             crit_ids = [str(c).strip() for c in (criterion_ids or []) if str(c).strip()]
@@ -841,12 +1010,27 @@ class MissionEngine:
                 if ok:
                     now_valid.append(s)
             if len(now_valid) >= max_parallel:
+                message = f"max_parallel_sessions={max_parallel} already reached"
+                waiter = self.record_waiting(
+                    mission_id,
+                    agent_identity,
+                    WAITING_CAPACITY,
+                    message,
+                    harness_id=harness_id,
+                    device_id=device_id,
+                    role=role,
+                    limit="constraints.max_parallel_sessions",
+                    limit_value=max_parallel,
+                    in_use=len(now_valid),
+                )
                 return {
                     "ok": False,
                     "status": "denied",
                     "error": "parallel_session_denied",
-                    "message": f"max_parallel_sessions={max_parallel} already reached",
+                    "message": message,
                     "clause": "constraints.max_parallel_sessions",
+                    "waiting_for": WAITING_CAPACITY,
+                    "waiting_since": waiter.get("since"),
                 }
 
             duration = max(1, min(duration_raw, 24 * 60))
@@ -916,12 +1100,14 @@ class MissionEngine:
                 "granted_at": granted_at,
                 "expires_at": expires_at,
                 "status": "active",
+                "waiting_for": WAITING_NONE,
             }
             if lease_device_id:
                 lease["device_id"] = lease_device_id
             if lease_harness_id:
                 lease["harness_id"] = lease_harness_id
             self.save_session(lease)
+            self.clear_waiting(mission_id, agent_identity)
             audit = self.append_audit(
                 "session_authorized",
                 {"mission_id": mission_id, "session_id": session_id, "contract_version": version},
@@ -932,6 +1118,7 @@ class MissionEngine:
                 "session_id": session_id,
                 "session_lease": lease,
                 "audit_event_id": audit["event_id"],
+                "waiting_for": WAITING_NONE,
             }
 
     def get_session(self, session_id: str) -> dict[str, Any] | None:
@@ -975,6 +1162,7 @@ class MissionEngine:
                 "error": code,
                 "message": message,
                 "required_action": "pause",
+                "waiting_for": WAITING_CONTRACT if code == "contract_version_mismatch" else WAITING_NONE,
             }
 
         remaining_seconds = 0
@@ -1005,6 +1193,7 @@ class MissionEngine:
             "project_id": project_id,
             "device_id": session_device_id,
             "mount_path": mount_path,
+            "waiting_for": self.session_waiting_for(session),
             "contract": contract,
             "done_criteria": contract.get("done_criteria", []),
             "non_goals": contract.get("non_goals", []),
@@ -1176,6 +1365,7 @@ class MissionEngine:
             "session_id": session_id,
             "mission_id": session["mission_id"],
             "contract_version": contract["contract_version"],
+            "waiting_for": self.session_waiting_for(session),
             "classification": classification,
             "required_action": required_action,
             "reason": reason,
@@ -1645,6 +1835,7 @@ class MissionEngine:
                 gate_info = gate_result
             with mission_state_lock(self.cfg.hai_home):
                 revoked = self.revoke_all_sessions(mission_id, reason="abandoned")
+                self.clear_waiting_for_mission(mission_id)
                 meta = self.load_mission_meta(mission_id) or meta
                 meta["status"] = "abandoned"
                 meta["closed_at"] = _utc_now()
@@ -1734,6 +1925,7 @@ class MissionEngine:
 
         with mission_state_lock(self.cfg.hai_home):
             revoked = self.revoke_all_sessions(mission_id, reason="completed")
+            self.clear_waiting_for_mission(mission_id)
             meta = self.load_mission_meta(mission_id) or meta
             meta["status"] = "completed"
             meta["closed_at"] = _utc_now()

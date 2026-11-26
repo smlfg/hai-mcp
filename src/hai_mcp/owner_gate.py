@@ -501,6 +501,41 @@ class OwnerGate:
                 count += 1
         return count
 
+    def live_challenges(self) -> list[dict[str, Any]]:
+        """Every owner challenge that is still live (pending or approved, not expired).
+
+        Read-only on purpose: unlike `_find_pending` this never retires a record.
+        A status board must not mutate the gate while it reads it.
+        """
+        if not self.challenges_dir.is_dir():
+            return []
+        now = time.time()
+        live: list[dict[str, Any]] = []
+        for path in sorted(self.challenges_dir.glob("C-*.json")):
+            try:
+                record = read_json(path, None)
+            except (OSError, ValueError):
+                continue  # unreadable record: no attributable decision, no claim
+            if not isinstance(record, dict):
+                continue
+            if record.get("status") not in _LIVE_CHALLENGE_STATUSES:
+                continue
+            if float(record.get("expires_ts", 0) or 0) <= now:
+                continue
+            live.append(record)
+        return live
+
+    def pending_for_mission(self, mission_id: str) -> list[dict[str, Any]]:
+        """Live owner challenges that gate one mission — the human still has to act."""
+        mission_id = str(mission_id or "")
+        if not mission_id:
+            return []
+        return [
+            record
+            for record in self.live_challenges()
+            if str((record.get("preview") or {}).get("mission_id", "")) == mission_id
+        ]
+
     # ----- storage ---------------------------------------------------------
 
     @contextlib.contextmanager

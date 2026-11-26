@@ -69,10 +69,12 @@ def hai_status(
         str | None, Field(description="Optional project directory whose next-step flags should be reported.")
     ] = None,
 ) -> str:
-    """Return ACTIVE lanes, focus, inbox count, and optional project next-step flags.
+    """Return ACTIVE lanes, focus, inbox count, the mission board, and optional project next-step flags.
 
     Use this when you need current control-plane state; use hai_health instead to diagnose
-    the server or project path itself. Read-only. Returns JSON with ok and the status fields.
+    the server or project path itself. The mission board lists every session of the active
+    mission with the waiting_for field (capacity | owner_touchid | contract | none), so it
+    is visible who has to act. Read-only. Returns JSON with ok and the status fields.
     """
     return _json(get_control_plane().status(project_path))
 
@@ -364,7 +366,9 @@ def hai_authorize_session(
 
     Use this when an agent needs permission to work under a contract; use hai_get_contract
     instead to read that contract. The mission must be active and the contract version must
-    match. Returns JSON with ok, session_id, and lease fields, or error.
+    match. Returns JSON with ok, session_id, and lease fields, or error. The waiting_for
+    field names what blocks the request: capacity (no free slot), contract (stale
+    contract version) or none (granted).
     """
     return _json(
         get_control_plane().authorize_session(
@@ -425,7 +429,8 @@ def hai_get_contract(
 
     Use this when you need the full contract rather than a summary; use hai_recontract instead
     to change it under the owner gate, or hai_check_activity to check activity. Read-only.
-    Returns JSON with ok and the contract.
+    Returns JSON with ok, the contract, and the waiting_for field (capacity |
+    owner_touchid | contract | none).
     """
     return _json(get_control_plane().get_contract(session_id))
 
@@ -464,7 +469,8 @@ def hai_check_activity(
 
     Use this when you need full audit classification; use hai_drift_check instead for the
     lightweight wrapper over the same engine. Requires a valid session lease and writes audit
-    only. Returns JSON with ok and the classification.
+    only. Returns JSON with ok, the classification, and the waiting_for field (capacity |
+    owner_touchid | contract | none).
     """
     return _json(
         get_control_plane().check_activity(

@@ -10,7 +10,7 @@ from typing import Any
 
 from hai_mcp.boundary import strict_int
 from hai_mcp.config import Config, ensure_hai_home
-from hai_mcp.ids import validate_intake_id
+from hai_mcp.ids import IdentifierError, validate_intake_id
 from hai_mcp.locking import mission_state_lock
 from hai_mcp.mission import MissionEngine, _new_id, _utc_now
 from hai_mcp.projects import ProjectStore
@@ -124,6 +124,7 @@ class ControlPlane:
             "hai_home": str(self.cfg.hai_home),
             "owner_gate": self.cfg.owner_gate,
             "pending_owner_challenges": self.mission.owner_gate.pending_count(),
+            "mission_board": self.mission_board(),
         }
         if project_path:
             try:
@@ -136,6 +137,22 @@ class ControlPlane:
             except PathError as exc:
                 return {"ok": False, "error": exc.code, "message": exc.message}
         return out
+
+    def mission_board(self) -> dict[str, Any] | None:
+        """The mission board of the active mission (None when no mission is active).
+
+        Shows every session of that mission and what it waits for: capacity,
+        an outstanding owner decision, a moved-on contract — or nothing.
+        """
+        pointer = self.mission.load_active_pointer()
+        mission_id = pointer.get("mission_id")
+        if not mission_id:
+            return None
+        try:
+            board = self.mission.mission_board(str(mission_id))
+        except IdentifierError:
+            return None
+        return board if board.get("ok") else None
 
     def get_next_step(self, project_path: str) -> dict[str, Any]:
         try:
@@ -735,6 +752,7 @@ class ControlPlane:
             if active.get("mission_id") and active.get("status") == "active":
                 paused_mission = active["mission_id"]
                 revoked = self.mission.revoke_all_sessions(paused_mission, reason="day_stopped")
+                self.mission.clear_waiting_for_mission(paused_mission)
 
         stop_id = _new_id("A")
         self.stop_dir.mkdir(parents=True, exist_ok=True)
