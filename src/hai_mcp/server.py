@@ -52,9 +52,11 @@ def hai_health(
 ) -> str:
     """Check HAI-MCP server health and optional project path usability without model calls.
 
-    Use this when you need version, hai_home writability, owner-gate mode, or configuration
+    Use this when you need version, the running build (commit, branch, uncommitted changes,
+    distance to origin/main), hai_home writability, owner-gate mode, or configuration
     warnings; use hai_status instead to inspect ACTIVE lanes, focus, inbox count, and
-    next-step flags. Read-only. Returns JSON with ok and health fields.
+    next-step flags. Pass any build.warnings on to the owner verbatim. Read-only. Returns
+    JSON with ok and health fields.
     """
     return _json(get_control_plane().health(project_path))
 
