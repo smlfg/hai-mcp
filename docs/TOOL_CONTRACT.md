@@ -67,6 +67,29 @@ Derived from the `Mutates` column; `openWorldHint` is `false` for every tool. `i
 | `hai_proof` | no | yes | no |
 | `hai_stop` | no | yes | no |
 
+## Session waiting state
+
+Every session reports one status field: `waiting_for`. It says what blocks the
+session — and therefore who has to act.
+
+| Value | Meaning | Who acts |
+|---|---|---|
+| `none` | the lease is valid, the session waits for nothing | nobody |
+| `capacity` | no free session slot (`max_parallel_sessions` reached) | the owner frees a slot, or the agent retries later |
+| `owner_touchid` | an owner decision for this mission is still outstanding (Touch ID, or a one-time code in `nonce` mode) | the owner |
+| `contract` | the lease was revoked because the contract moved on, or the request asked for a stale contract version | the agent re-reads the contract and re-authorizes |
+
+Where it appears:
+
+- `hai_authorize_session`: `waiting_for` on the answer — `capacity` or `contract` when the request is denied, `none` when the lease is granted.
+- `hai_get_contract` and `hai_check_activity`: the `waiting_for` of that session.
+- `hai_status` → `mission_board`: the board of the active mission — every session with its `waiting_for`, the agents whose request waits (`waiting`) and the owner decisions that are still open (`owner_pending`).
+
+The board is read-only: it changes no lease, no challenge, no contract. A pending
+owner decision outranks the stored reason, because it is the one that needs a human.
+In `ack_legacy` mode there is no challenge to observe, so the board never reports
+`owner_touchid` there — that gate is an honor system, not an open decision.
+
 ## Owner gate
 
 The owner is a separate principal. Default mode `nonce`: the server delivers a one-time code through an owner channel the client cannot read (`file` or `ntfy`), or — on macOS with `HAI_OWNER_CHANNEL=touchid` — the server process itself shows a Touch ID prompt and records the approval. The client can pass a code channel only with a code a human relayed, and can pass Touch ID only by calling again after that process observed a successful biometric for the same fingerprint. `ack_legacy` keeps the old self-asserted `owner_ack`. Full contract: `docs/OWNER_GATE.md`.
@@ -77,6 +100,7 @@ The owner is a separate principal. Default mode `nonce`: the server delivers a o
 - `HAI_OWNER_HOME` (env, default `~/.hai-owner`) — owner channel `file`, and the optional Touch ID file fallback; never inside `HAI_HOME`
 - `HAI_OWNER_CHANNEL=touchid` — macOS Touch ID / device-owner prompt spawned by the server. Optional `HAI_OWNER_TOUCHID_TIMEOUT`, `HAI_OWNER_TOUCHID_HELPER`, `HAI_OWNER_TOUCHID_FALLBACK=file`
 - Logical projects: `HAI_HOME/core/projects.json` (`project_id` + per-device `mounts`)
+- Session waiting records: `HAI_HOME/missions/<mission_id>/waiting.json` (one entry per waiting agent)
 - Project artifacts: `<project_path>/Projek-Managment/` (legacy) or device mount + relative prefixes when `project_id` is set
 - All writes resolved and confined
 

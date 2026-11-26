@@ -84,6 +84,9 @@ judge — agents call it to ask *"may I?"* and to record *"I did"*.
 - **Time-bounded session leases** — `hai_authorize_session` binds a lease to
   a mission id, a contract version, a duration, a role, a contribution, and
   a claimed criterion set.
+- **Visible waiting state** — every session reports `waiting_for` (`capacity` |
+  `owner_touchid` | `contract` | `none`) in the tool answers and in the mission
+  board (`hai_status` → `mission_board`), so it is visible when a human has to act.
 - **Deterministic drift check** — `hai_check_activity` classifies planned or
   observed activity against the contract without ever calling an LLM.
 - **Two-principal owner gate**:
@@ -104,7 +107,7 @@ judge — agents call it to ask *"may I?"* and to record *"I did"*.
   bearer-token binding (loopback only by default).
 - **Checkpoint & recover** — `hai_checkpoint` snapshots context; `hai_recover`
   returns the smallest recovery next action.
-- **203 tests green** — the engine is covered; the slice remains open
+- **218 tests green** — the engine is covered; the slice remains open
   for the learning-budget and owner-instrument follow-ups.
 
 ---
