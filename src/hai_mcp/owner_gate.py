@@ -53,6 +53,7 @@ import time
 import urllib.error
 import urllib.request
 import uuid
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
@@ -63,7 +64,7 @@ from hai_mcp.paths import real_path
 from hai_mcp.storage import read_json, write_json
 
 OWNER_GATE_MODES = frozenset({"nonce", "ack_legacy"})
-GATE_ACTIONS = frozenset({"accept_next_step", "recontract", "abandon_mission"})
+GATE_ACTIONS = frozenset({"accept_next_step", "recontract", "abandon_mission", "bind_worktree", "capacity_worktrees"})
 MAX_ATTEMPTS = 3
 _LIVE_CHALLENGE_STATUSES = frozenset({"pending", "approved"})
 
@@ -72,9 +73,20 @@ _CODE_ALPHABET = "23456789ABCDEFGHJKMNPQRSTUVWXYZ"
 _CODE_LEN = 8
 _NTFY_TIMEOUT_SECONDS = 5
 
-# macOS rejects or truncates a very long LAContext reason. Keep the decision text short.
+# macOS truncates long LAContext reasons; durable tokens (action id, fp) come first.
 _TOUCHID_REASON_MAX = 120
-_EXCERPT_KEYS = ("next_step", "diff", "abandon_reason", "objective", "reason")
+_APPROVAL_FIELDS = ("agent", "session", "topic")
+_ACTION_LABELS = {
+    "capacity_worktrees": "Kapazitäts-Worktrees freigeben",
+    "bind_worktree": "Isolierten Worktree freigeben",
+    "accept_next_step": "Nächsten Schritt übernehmen",
+    "recontract": "Auftrag ändern",
+    "abandon_mission": "Auftrag abbrechen",
+}
+_FIELD_LABELS = {
+    "objective": "Ziel", "artifact": "Ergebnis", "done_criteria": "Erfolgskriterien",
+    "non_goals": "Ausnahmen", "constraints": "Rahmenbedingungen", "owner": "Verantwortung",
+}
 _METHOD_RE = re.compile(r"^[a-z0-9_-]{1,32}$")
 _HELPER_STDOUT_MAX = 8192
 
@@ -134,50 +146,141 @@ def _touchid_platform_ok() -> bool:
     return sys.platform == "darwin"
 
 
-def _preview_text(value: Any) -> str:
-    if isinstance(value, str):
-        text = value
-    else:
-        text = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+def _readable_text(value: Any) -> str:
+    if not isinstance(value, str):
+        return ""
+    text = unicodedata.normalize("NFC", value)
+    text = "".join(" " if unicodedata.category(ch).startswith("C") else ch for ch in text)
     return " ".join(text.split())
 
 
-def build_touchid_reason(action: str, summary: str, preview: dict[str, Any], fp: str) -> str:
-    """Short text shown in the macOS prompt: action, project, excerpt, fingerprint prefix.
+def normalize_approval_context(value: Any) -> dict[str, str]:
+    """Client-provided display labels, never authenticated identity or technical IDs.
 
-    The dialog prefers a project token plus the change excerpt. ``summary`` fills the
-    excerpt when the preview has no change text, so the owner still sees the decision.
+    Bind full normalized values, including text beyond the displayed excerpt, so a
+    change to a hidden suffix also requires another approval.
     """
-    prefix = fp.removeprefix("sha256:")[:12] or "unknown"
-    tail = f"fp {prefix}"
-    project = ""
+    if not isinstance(value, dict):
+        return {}
+    return {key: text for key in _APPROVAL_FIELDS if (text := _readable_text(value.get(key)))}
+
+
+def _display_label(context: dict[str, str], key: str, fallback: str, limit: int) -> str:
+    value = context.get(key, "")
+    # Transport names and caller labels can themselves be opaque identifiers. Keep
+    # them in the binding, but never substitute them for a readable identity/title.
+    opaque = re.fullmatch(
+        r"(?:[MSC]-[A-Za-z0-9_-]+|(?:sha256:)?[a-fA-F0-9]{12,}|"
+        r"[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12})",
+        value,
+    )
+    return _bounded(value if value and not opaque else fallback, limit)
+
+
+def _bounded(text: str, limit: int) -> str:
+    return text if len(text) <= limit else text[:limit - 1].rstrip() + "…"
+
+
+def _change_excerpt(action: str, preview: dict[str, Any]) -> str:
+    if action == "capacity_worktrees":
+        return (
+            "Projekt: "
+            + _readable_text(preview.get("project_path"))
+            + " bis "
+            + _readable_text(preview.get("expires_at"))
+        )
+    if action == "bind_worktree":
+        return "Schreibort: " + _readable_text(preview.get("worktree_path")) + " bis " + _readable_text(preview.get("expires_at"))
+    if action == "recontract":
+        diff = preview.get("diff")
+        if isinstance(diff, list):
+            parts = []
+            for item in diff:
+                if isinstance(item, dict):
+                    label = _FIELD_LABELS.get(item.get("field"), "Änderung")
+                    old = _readable_text(str(item.get("old", "")))
+                    new = _readable_text(str(item.get("new", "")))
+                    parts.append(f"{label}: {old} → {new}")
+            return "; ".join(parts)
+        return _readable_text(diff)
+    key = "next_step" if action == "accept_next_step" else "abandon_reason"
+    return _readable_text(preview.get(key))
+
+
+def _touchid_fp_prefix(fp: str) -> str:
+    return fp.removeprefix("sha256:")[:12] or "unknown"
+
+
+def _touchid_project_name(preview: dict[str, Any]) -> str:
     project_path = preview.get("project_path")
     if isinstance(project_path, str) and project_path.strip():
-        project = Path(project_path).name
-    elif isinstance(preview.get("mission_id"), str):
-        project = str(preview["mission_id"])[-8:]
-    head = f"{action} · {project}" if project else action
-    ordered = [key for key in _EXCERPT_KEYS if key in preview]
-    ordered.extend(key for key in preview if key not in ordered and key not in {"project_path", "mission_id"})
-    excerpt = ""
-    for key in ordered:
-        text = _preview_text(preview.get(key))
-        if text:
-            excerpt = f"{key}: {text}"
-            break
+        return Path(project_path).name
+    if isinstance(preview.get("mission_id"), str):
+        return str(preview["mission_id"])[-8:]
+    return ""
+
+
+def _touchid_change_line(action: str, preview: dict[str, Any], summary: str) -> str:
+    excerpt = _change_excerpt(action, preview)
     if not excerpt:
-        excerpt = " ".join(summary.split())
-    room = _TOUCHID_REASON_MAX - len(head) - len(tail) - 6
-    if excerpt and room > 8:
-        if len(excerpt) > room:
-            excerpt = excerpt[: room - 1].rstrip() + "…"
-        reason = f"{head} · {excerpt} · {tail}"
-    else:
-        reason = f"{head} · {tail}"
-    reason = " ".join(reason.split())
-    if len(reason) > _TOUCHID_REASON_MAX:
-        reason = reason[: _TOUCHID_REASON_MAX - 1].rstrip() + "…"
-    return reason or f"{action} · {tail}"
+        excerpt = _readable_text(summary)
+    if not excerpt:
+        return ""
+    if action == "recontract":
+        return f"diff: {excerpt}"
+    if action in {"bind_worktree", "capacity_worktrees"}:
+        return excerpt
+    return f"Änderung: {excerpt}"
+
+
+def _touchid_context_suffix(preview: dict[str, Any], action: str, room: int) -> str:
+    if room < 12:
+        return ""
+    context = normalize_approval_context(preview.get("approval_context"))
+    worktree_action = action in {"bind_worktree", "capacity_worktrees"}
+    agent_lim = 20 if worktree_action else 40
+    session_lim = 24 if worktree_action else 56
+    topic_lim = 28 if worktree_action else 64
+    pieces: list[str] = []
+    for key, fallback, limit in (
+        ("agent", "Agent nicht benannt", agent_lim),
+        ("session", "Session nicht benannt", session_lim),
+        ("topic", "Thema nicht benannt", topic_lim),
+    ):
+        label = _display_label(context, key, fallback, limit)
+        if label != fallback:
+            pieces.append(f"{key.capitalize()}: {label}" if key != "topic" else f"Thema: {label}")
+    if not pieces:
+        return ""
+    suffix = " · " + " · ".join(pieces)
+    return suffix if len(suffix) <= room else ""
+
+
+def build_touchid_reason(action: str, summary: str, preview: dict[str, Any], fp: str) -> str:
+    """Owner-facing Touch ID text (≤120 chars): machine action id, German labels, excerpt, fp.
+
+    ``summary`` fills the excerpt when the preview has no change text. The full
+    normalized approval context stays bound internally even when omitted here.
+    """
+    action_marker = f"[{action}]"
+    action_label = _ACTION_LABELS.get(action, "Änderung freigeben")
+    fp_token = f"fp {_touchid_fp_prefix(fp)}"
+    tail = f" · {fp_token}"
+    head = f"{action_marker} · Aktion: {action_label}"
+    project = _touchid_project_name(preview)
+    if project:
+        head = f"{head} · {project}"
+    change = _touchid_change_line(action, preview, summary)
+    room = _TOUCHID_REASON_MAX - len(head) - len(tail)
+    body = ""
+    if change and room > 4:
+        body = f" · {_bounded(change, max(8, room - 3))}"
+    reason = head + body + tail
+    extra_room = _TOUCHID_REASON_MAX - len(reason)
+    reason += _touchid_context_suffix(preview, action, extra_room)
+    reason = _bounded(reason, _TOUCHID_REASON_MAX)
+    assert len(reason) <= _TOUCHID_REASON_MAX
+    return reason
 
 
 def _sanitize_method(value: Any) -> str:
@@ -1012,6 +1115,7 @@ class OwnerGate:
         summary: str,
         preview: dict[str, Any],
         owner_code: Any,
+        approval_context: dict[str, str] | None = None,
     ) -> tuple[bool, dict[str, Any]]:
         """Return ``(passed, result)``.
 
@@ -1023,6 +1127,10 @@ class OwnerGate:
         if self.mode != "nonce":
             raise RuntimeError("OwnerGate.require is only valid in nonce mode")
 
+        context = normalize_approval_context(approval_context)
+        if context:
+            subject = {**subject, "approval_context": context}
+        preview = {**preview, "approval_context": context}
         fp = fingerprint(subject)
         supplied = owner_code not in (None, "")
         code = normalize_code(owner_code) if supplied else None
